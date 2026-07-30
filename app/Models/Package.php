@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -41,6 +42,47 @@ class Package extends Model
     ];
 
     /**
+     * `Y-m-d` diterima apa adanya; `Y-m` (bulannya saja) dinormalkan ke tanggal 1.
+     * Dijaga di setter supaya jalur mana pun (import, tinker, worker yang masih
+     * memegang kode lama) kena aturan yang sama.
+     *
+     * Tahun saja TIDAK diterima. Flyer haji sering cuma menulis "Berangkat Tahun
+     * 2027" dan model menyalinnya apa adanya; cast `date` membaca "2027" sebagai
+     * unix timestamp — 2027 detik — jadi barisnya masuk bertanggal 1970-01-01
+     * 07:33, terurut paling awal dan lolos semua filter rentang.
+     *
+     * Bulan tanpa tanggal sengaja TIDAK dibuang: banyak flyer memang cuma menulis
+     * "Maret 2027", dan tanggal 1 masih bisa diurut & difilter rentang. Yang
+     * membedakannya dari tanggal pasti adalah `date_certainty` = month — jangan
+     * pernah melabeli hasil normalisasi ini `exact`, angka tanggalnya bikinan kita.
+     */
+    public static function tanggal(mixed $value): ?string
+    {
+        $value = $value instanceof \DateTimeInterface ? $value->format('Y-m-d') : (string) $value;
+
+        return match (true) {
+            (bool) preg_match('/^\d{4}-\d{2}-\d{2}/', $value) => $value,
+            (bool) preg_match('/^\d{4}-\d{2}$/', $value) => "$value-01",
+            default => null,
+        };
+    }
+
+    /** Tanggal yang cuma bulan -> `month`, apa pun kata model. Lihat tanggal(). */
+    public static function kepastian(mixed $value, ?string $certainty): string
+    {
+        return match (true) {
+            self::tanggal($value) === null => 'unknown',
+            (bool) preg_match('/^\d{4}-\d{2}-\d{2}/', (string) $value) => $certainty ?: 'exact',
+            default => 'month',
+        };
+    }
+
+    public function setDepartureDateAttribute(mixed $value): void
+    {
+        $this->attributes['departure_date'] = self::tanggal($value);
+    }
+
+    /**
      * Kunci dedup: satu paket yang diposting ulang puluhan agen harus menyatu
      * jadi satu baris. Sengaja TIDAK memakai source_account.
      *
@@ -52,10 +94,59 @@ class Package extends Model
         ?string $departureDate, ?string $hotelMakkah,
         ?string $hotelMadinah, ?string $airline,
     ): string {
-        return implode('|', array_map(
-            fn ($v) => mb_strtolower(trim((string) $v)) ?: '-',
-            [$departureDate, $hotelMakkah, $hotelMadinah, $airline],
-        ));
+        return implode('|', [
+            self::tanggal($departureDate) ?? '-',
+            ...array_map(self::fold(...), [$hotelMakkah, $hotelMadinah, $airline]),
+        ]);
+    }
+
+    /**
+     * Nilai untuk kunci dedup. Transliterasi Arab-Latin di flyer tidak konsisten
+     * dan pemisah daftar juga tidak: paket yang sama diposting dua kali oleh akun
+     * yang sama sebagai "Qashr Al Anshar" + "Saudia, Garuda Indonesia" lalu
+     * "Qasr Al Anshar" + "Saudia / Garuda Indonesia" — dulu jadi dua baris.
+     *
+     * Yang dibuang: tanda baca, spasi, kata sandang "al", dan huruf "h" (dh/kh/sh/th
+     * dan -ah di akhir semuanya varian ejaan). Token sisanya diurut supaya "A, B"
+     * sama dengan "B / A".
+     *
+     * ponytail: mengurutkan token berarti dua hotel yang katanya sama tapi
+     * urutannya beda ikut menyatu. Belum pernah kejadian di data; kalau nanti
+     * kejadian, hilangkan sort()-nya dan bandingkan sebagai himpunan bersorot.
+     */
+    private static function fold(?string $value): string
+    {
+        $tokens = preg_split('/[^a-z0-9]+/', mb_strtolower(trim((string) $value)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $tokens = array_filter(
+            array_map(fn ($t) => str_replace('h', '', $t), $tokens),
+            fn ($t) => $t !== '' && $t !== 'al',
+        );
+        sort($tokens);
+
+        return implode('', $tokens) ?: '-';
+    }
+
+    /**
+     * Hari terakhir paket. "9 hari" itu inklusif — berangkat 15 Agustus, pulang
+     * 23 Agustus — jadi orang tidak perlu menghitung sendiri.
+     */
+    public function returnDate(): ?Carbon
+    {
+        return $this->departure_date && $this->duration_days
+            ? $this->departure_date->copy()->addDays((int) $this->duration_days - 1)
+            : null;
+    }
+
+    /** "03 – 11 Nov 2026", atau cuma tanggal berangkat kalau durasinya kosong. */
+    public function dateLabel(string $month = 'M'): ?string
+    {
+        if (! $this->departure_date) {
+            return null;
+        }
+
+        return ($pulang = $this->returnDate())
+            ? $this->departure_date->translatedFormat("d $month").' – '.$pulang->translatedFormat("d $month Y")
+            : $this->departure_date->translatedFormat("d $month Y");
     }
 
     /**
@@ -125,29 +216,19 @@ class Package extends Model
     }
 
     /**
-     * Pindahkan raw + hasil ekstraksi seluruh post paket ini ke storage/trash.
-     * Dipindah, bukan dihapus: keputusannya manual dan bisa salah. Sekaligus bikin
-     * post ini tidak ikut ter-extract dan ter-import lagi di putaran berikutnya.
+     * Hapus raw + hasil ekstraksi seluruh post paket ini. Yang menjaga post ini
+     * tidak ter-fetch & ter-extract lagi itu baris `excluded_posts`, bukan filenya
+     * — jadi filenya tidak perlu disimpan di mana pun.
      */
-    public function trashSources(): void
+    public function deleteSources(): void
     {
         foreach ($this->posts() as $post) {
             if (! $post['media_id']) {
                 continue;
             }
 
-            $dest = storage_path("trash/{$post['account']}/{$post['media_id']}");
-            $raw = storage_path("raw/{$post['account']}/{$post['media_id']}");
-            $json = storage_path("extracted/{$post['media_id']}.json");
-
-            // rename() gagal diam-diam kalau folder induk tujuan belum ada.
-            File::ensureDirectoryExists(dirname($dest));
-
-            is_dir($raw) ? File::moveDirectory($raw, $dest, overwrite: true) : File::ensureDirectoryExists($dest);
-
-            if (is_file($json)) {
-                File::move($json, "$dest/extracted.json");
-            }
+            File::deleteDirectory(storage_path("raw/{$post['account']}/{$post['media_id']}"));
+            File::delete(storage_path("extracted/{$post['media_id']}.json"));
         }
     }
 

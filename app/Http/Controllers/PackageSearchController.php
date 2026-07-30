@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Package;
-use App\Support\BannedPost;
+use App\Support\ExcludedPost;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -13,9 +13,6 @@ use Illuminate\View\View;
 
 /**
  * Pencarian publik. Hanya paket published.
- *
- * Filter masih jalan lewat query string (?city=&airline=&max_price=...), formnya
- * saja yang dilepas dari halaman supaya layar penuh flyer saat review.
  */
 class PackageSearchController extends Controller
 {
@@ -27,6 +24,21 @@ class PackageSearchController extends Controller
         'price_desc' => 'termahal',
     ];
 
+    /**
+     * Filter pilihan-tertutup: param query -> kolom. Isinya tidak diketik manual —
+     * `facets()` menarik nilai yang benar-benar ada di data beserta jumlahnya, jadi
+     * tidak ada pilihan yang hasilnya nol dan tidak ada nilai yang kelewat (nama
+     * maskapai di flyer belasan ejaan: "Saudia", "Saudia Airlines", "Saudi Airlines").
+     */
+    public const FACETS = [
+        'city' => 'departure_city',
+        'airline' => 'airline',
+        'akun' => 'source_account',
+        'extension' => 'extension',
+        'certainty' => 'date_certainty',
+        'status' => 'status',
+    ];
+
     public function index(Request $request): View
     {
         // Pratinjau lokal: lihat paket yang belum lolos review. Default menyala di
@@ -34,15 +46,16 @@ class PackageSearchController extends Controller
         // "publish tanpa review manusia" tidak pernah ada di produksi.
         $preview = app()->isLocal() && $request->boolean('semua', true);
 
-        $query = Package::query()
-            ->unless($preview, fn ($q) => $q->published());
+        $base = fn () => Package::query()->unless($preview, fn ($q) => $q->published());
 
-        if ($city = $request->string('city')->toString()) {
-            $query->where('departure_city', $city);
+        $query = $base();
+
+        foreach (self::FACETS as $param => $column) {
+            if ($value = $request->string($param)->toString()) {
+                $query->where($column, $value);
+            }
         }
-        if ($airline = $request->string('airline')->toString()) {
-            $query->where('airline', $airline);
-        }
+
         if ($from = $request->date('from')) {
             $query->whereDate('departure_date', '>=', $from);
         }
@@ -58,6 +71,9 @@ class PackageSearchController extends Controller
         if ($maxPrice = $request->integer('max_price')) {
             $query->whereAny(Package::PRICE_COLUMNS, '<=', $maxPrice);
         }
+        if ($minPrice = $request->integer('min_price')) {
+            $query->whereAny(Package::PRICE_COLUMNS, '>=', $minPrice);
+        }
         // Nama hotel apa adanya, jadi filternya pencocokan teks — bintang hotel
         // tidak ada lagi (dulu dari tabel master; flyer tidak menyebutkannya).
         if ($hotel = $request->string('hotel')->toString()) {
@@ -65,6 +81,19 @@ class PackageSearchController extends Controller
                 ->where('hotel_makkah', 'like', "%$hotel%")
                 ->orWhere('hotel_madinah', 'like', "%$hotel%"));
         }
+        // Cari bebas: yang sering dicari orang tapi bukan pilihan tertutup —
+        // nama pembimbing, hotel, kota, maskapai sekaligus.
+        if ($cari = $request->string('q')->toString()) {
+            $query->where(fn ($q) => $q
+                ->where('guide_name', 'like', "%$cari%")
+                ->orWhere('hotel_makkah', 'like', "%$cari%")
+                ->orWhere('hotel_madinah', 'like', "%$cari%")
+                ->orWhere('departure_city', 'like', "%$cari%")
+                ->orWhere('airline', 'like', "%$cari%"));
+        }
+        // Saklar "ada harga"/"ada tanggal" tidak ada lagi: keduanya sekarang syarat
+        // masuk DB (ImportExtractedPackages::belumLengkap), jadi filternya pasti
+        // mengembalikan semua baris.
 
         $sort = $request->string('sort')->toString();
         $sort = isset(self::SORTS[$sort]) ? $sort : 'date';
@@ -91,13 +120,42 @@ class PackageSearchController extends Controller
             'packages' => $packages,
             'preview' => $preview,
             'sort' => $sort,
+            'facets' => $this->facets($base),
+            'durations' => $base()->whereNotNull('duration_days')
+                ->distinct()->orderBy('duration_days')->pluck('duration_days'),
             'reference' => (int) config('umroh.bpiu_reference'),
         ]);
     }
 
     /**
-     * "Ini bukan flyer umroh" — buang paketnya, banned post sumbernya supaya tidak
-     * pernah di-scrap lagi, dan pindahkan raw + hasil ekstraksinya ke storage/trash.
+     * Nilai yang benar-benar ada per kolom facet + jumlah barisnya, terbanyak dulu.
+     *
+     * Sengaja dihitung dari himpunan dasar (cuma scope status), bukan dari hasil
+     * yang sudah difilter: kalau ikut menyempit, memilih satu kota membuang semua
+     * kota lain dari daftar dan pilihannya tidak bisa diganti tanpa reset.
+     *
+     * @param  \Closure(): \Illuminate\Database\Eloquent\Builder  $base
+     * @return array<string, \Illuminate\Support\Collection<string, int>>
+     */
+    private function facets(\Closure $base): array
+    {
+        $out = [];
+
+        foreach (self::FACETS as $param => $column) {
+            $out[$param] = $base()
+                ->whereNotNull($column)->where($column, '!=', '')
+                ->selectRaw("$column as nilai, count(*) as jumlah")
+                ->groupBy($column)
+                ->orderByDesc('jumlah')
+                ->pluck('jumlah', 'nilai');
+        }
+
+        return $out;
+    }
+
+    /**
+     * "Ini bukan flyer umroh" — buang paketnya, kecualikan post sumbernya supaya tidak
+     * pernah di-scrap lagi, dan hapus raw + hasil ekstraksinya.
      * Keputusannya dicatat ke storage/feedback.jsonl sebagai bahan perbaikan prompt.
      */
     public function destroy(Package $package, Request $request): JsonResponse
@@ -106,8 +164,8 @@ class PackageSearchController extends Controller
 
         // Satu carousel bisa jadi beberapa paket (satu gambar = satu baris). Kalau
         // slide lain dari post yang sama masih hidup, × cuma menyangkal baris ini:
-        // post-nya tidak dibanned dan rawnya tidak dipindah ke trash — kalau
-        // dipindah, semua paket sebelahnya kehilangan flyernya.
+        // post-nya tidak dikecualikan dan rawnya tidak dihapus — kalau
+        // dihapus, semua paket sebelahnya kehilangan flyernya.
         $punyaSaudara = Package::where('media_id', $package->media_id)
             ->whereKeyNot($package->getKey())
             ->exists();
@@ -122,9 +180,9 @@ class PackageSearchController extends Controller
                 'extraction' => $package->raw_extraction,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).PHP_EOL);
 
-            // Ban = seluruh post tidak akan disentuh lagi. Cuma boleh kalau tidak
+            // Kecualikan = seluruh post tidak akan disentuh lagi. Cuma boleh kalau tidak
             // ada slide lain dari post itu yang masih jadi paket.
-            $punyaSaudara || BannedPost::add(
+            $punyaSaudara || ExcludedPost::add(
                 $post['media_id'],
                 $post['account'],
                 'manual',
@@ -132,7 +190,7 @@ class PackageSearchController extends Controller
             );
         }
 
-        $punyaSaudara || $package->trashSources();
+        $punyaSaudara || $package->deleteSources();
         $package->delete();
 
         return response()->json(['deleted' => $package->id]);
@@ -166,7 +224,8 @@ class PackageSearchController extends Controller
             404,
         );
 
-        return view('package', [
+        // Lightbox mengambil isinya lewat fetch: potongan yang sama, tanpa layout.
+        return view($request->ajax() ? 'partials.detail' : 'package', [
             'package' => $package,
             'reference' => (int) config('umroh.bpiu_reference'),
         ]);

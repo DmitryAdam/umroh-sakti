@@ -62,7 +62,7 @@ class FetchAccount implements ShouldQueue
         PipelineLog::write('ig', "== fetch @{$this->account->username} (limit {$this->limit})");
 
         // stdout probe.php diteruskan apa adanya: request ke graph.facebook.com,
-        // tiap gambar yang di-download, dan post yang dilewat karena sudah dibanned.
+        // tiap gambar yang di-download, dan post yang dilewat karena sudah dikecualikan.
         $result = Process::timeout($this->timeout)->run([
             PHP_BINARY,
             base_path('probe.php'),

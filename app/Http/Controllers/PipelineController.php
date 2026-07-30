@@ -50,13 +50,37 @@ class PipelineController extends Controller
      * Semua angka dihitung dari sumbernya langsung — tidak ada tabel progress
      * yang perlu dijaga tetap sinkron.
      *
-     * @return array<string, int|string|bool|null>
+     * Dua satuan yang sengaja dipisah, karena kalau dicampur corongnya bohong:
+     * **post** (satu postingan IG) dan **paket** (satu gambar penawaran). Satu
+     * carousel = satu post tapi bisa jadi beberapa hasil ekstraksi dan beberapa
+     * paket, jadi `paket > post` itu wajar dan bukan tanda dobel.
+     *
+     * @return array<string, mixed>
      */
     private function numbers(): array
     {
-        $accounts = SourceAccount::approved()->count();
-        $fetched = SourceAccount::approved()->whereNotNull('last_fetched_at')->count();
-        $antrian = DB::table('jobs')->count();
+        $antrianPer = DB::table('jobs')->selectRaw('queue, count(*) as total')
+            ->groupBy('queue')->pluck('total', 'queue');
+        $antrian = (int) $antrianPer->sum();
+
+        // Satu glob per direktori, lalu dibandingkan sebagai himpunan. Cek per-post
+        // (glob di dalam loop) berarti ratusan syscall tiap polling 2 detik.
+        $raw = array_map('basename', array_map('dirname', glob(storage_path('raw/*/*/post.json')) ?: []));
+        $hasil = glob(storage_path('extracted/*.json')) ?: [];
+
+        // Post yang ditolak filenya dihapus, jadi yang mengingat "pernah diunduh"
+        // tinggal barisnya di excluded_posts. Sekalian lebih jujur dari hitungan
+        // folder: barisnya ikut hilang kalau DB di-reset, foldernya tidak.
+        $dikecualikan = DB::table('excluded_posts')->count();
+
+        // "17890-2.json" dan "17890.json" sama-sama post 17890: carousel dipecah
+        // per gambar, jadi nama filenya bukan satuan post.
+        $dibaca = array_unique(array_map(
+            fn ($f) => explode('-', pathinfo($f, PATHINFO_FILENAME))[0], $hasil,
+        ));
+
+        $status = Package::query()->selectRaw('status, count(*) as total')
+            ->groupBy('status')->pluck('total', 'status');
 
         return [
             // Baris terakhir per antrian: ig sedang fetch siapa, ai sedang mengekstrak
@@ -65,16 +89,34 @@ class PipelineController extends Controller
             // Jejak detail: request ke graph.facebook.com, tiap gambar yang di-download,
             // request ke model vision & penyusun, nama file yang ditulis.
             'log' => PipelineLog::tail(80),
-            'akun' => $accounts,
-            'terfetch' => $fetched,
+
+            'akun' => SourceAccount::approved()->count(),
+            'terfetch' => SourceAccount::approved()->whereNotNull('last_fetched_at')->count(),
+            'akun_gagal' => SourceAccount::approved()->whereNotNull('last_error')->count(),
+
+            // Corong satuan POST.
+            // Diunduh = yang masih di raw + yang sudah dikecualikan. Tanpa yang kedua,
+            // angkanya turun tiap import (file post buangan dihapus) dan kelihatan
+            // seperti post hilang.
+            'post_diunduh' => count($raw) + $dikecualikan,
+            'post_menunggu' => count(array_diff($raw, $dibaca)),
+            'post_dibaca' => count(array_intersect($raw, $dibaca)) + $dikecualikan,
+            'post_dikecualikan' => $dikecualikan,
+            'alasan' => DB::table('excluded_posts')->selectRaw('reason, count(*) as total')
+                ->groupBy('reason')->pluck('total', 'reason'),
+
+            // Corong satuan PAKET.
+            'hasil_ekstraksi' => count($hasil),
+            'paket' => (int) $status->sum(),
+            'draft' => (int) ($status['draft'] ?? 0),
+            'review' => (int) ($status['review'] ?? 0),
+            'published' => (int) ($status['published'] ?? 0),
+
             'antrian' => $antrian,
-            'raw' => count(glob(storage_path('raw/*/*/post.json')) ?: []),
-            'extracted' => count(glob(storage_path('extracted/*.json')) ?: []),
-            'dibanned' => DB::table('banned_posts')->count(),
-            // Ditolak gerbang vision. Tanpa angka ini, post yang lenyap dari raw
-            // kelihatan seperti hilang, padahal dibuang dengan sengaja.
-            'trash' => count(glob(storage_path('trash/*/*'), GLOB_ONLYDIR) ?: []),
-            'paket' => Package::count(),
+            'antri_ig' => (int) ($antrianPer['ig'] ?? 0),
+            'antri_ai' => (int) ($antrianPer['ai'] ?? 0),
+            'antri_db' => (int) ($antrianPer['db'] ?? 0),
+            'gagal' => DB::table('failed_jobs')->count(),
             'jalan' => $antrian > 0,
         ];
     }

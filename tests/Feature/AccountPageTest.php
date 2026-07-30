@@ -137,4 +137,18 @@ class AccountPageTest extends TestCase
         Queue::assertPushed(FetchAccount::class, 1);
         Queue::assertPushed(fn (FetchAccount $job) => $job->account->username === 'ikut');
     }
+
+    public function test_scrap_yang_belum_pernah_melewati_akun_yang_sudah_di_scrap(): void
+    {
+        Queue::fake();
+        SourceAccount::create(['username' => 'belum', 'status' => 'approved']);
+        SourceAccount::create([
+            'username' => 'sudah', 'status' => 'approved', 'last_fetched_at' => now(),
+        ]);
+
+        $this->post(route('accounts.fetch_all'), ['baru' => 1])->assertRedirect();
+
+        Queue::assertPushed(FetchAccount::class, 1);
+        Queue::assertPushed(fn (FetchAccount $job) => $job->account->username === 'belum');
+    }
 }

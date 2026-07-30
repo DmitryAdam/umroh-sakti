@@ -14,7 +14,8 @@ class CrawlAccounts extends Command
 {
     protected $signature = 'packages:crawl
         {file? : daftar username/URL Instagram, satu per baris — didaftarkan sebagai approved}
-        {--limit=50 : post per akun}';
+        {--limit=50 : post per akun}
+        {--new : cuma akun yang belum pernah berhasil di-scrap}';
 
     protected $description = 'Antrikan fetch untuk semua akun approved';
 
@@ -30,9 +31,16 @@ class CrawlAccounts extends Command
             $this->info(count(SourceAccount::register($lines)).' akun baru didaftarkan.');
         }
 
-        $accounts = SourceAccount::approved()->get();
+        // `--new` pakai last_fetched_at (penanda terakhir BERHASIL), jadi akun yang
+        // percobaan terakhirnya gagal ikut lagi — itu memang yang mau diulang.
+        $accounts = SourceAccount::approved()
+            ->when($this->option('new'), fn ($q) => $q->whereNull('last_fetched_at'))
+            ->get();
+
         if ($accounts->isEmpty()) {
-            $this->error('Belum ada akun approved. Jalankan: php artisan packages:crawl accounts.txt');
+            $this->error($this->option('new')
+                ? 'Semua akun approved sudah pernah berhasil di-scrap.'
+                : 'Belum ada akun approved. Jalankan: php artisan packages:crawl accounts.txt');
 
             return self::FAILURE;
         }

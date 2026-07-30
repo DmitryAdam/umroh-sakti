@@ -26,7 +26,12 @@ class ExtractPost implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 300;
 
-    public int $uniqueFor = 3600;
+    // Disamakan dengan $timeout, bukan lebih lama. Worker yang di-kill di tengah job
+    // meninggalkan lock ini di cache_locks sampai habis, dan selama itu dispatch
+    // berikutnya untuk media_id yang sama hilang diam-diam. `ai` tidak kena rate limit
+    // tingkat app seperti `ig`, jadi tidak ada alasan menahannya lebih lama dari
+    // durasi maksimal job itu sendiri.
+    public int $uniqueFor = 300;
 
     public function __construct(public string $mediaId)
     {

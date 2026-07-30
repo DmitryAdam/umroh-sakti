@@ -22,7 +22,7 @@ return [
 
     /*
      * Keberangkatan sebelum tanggal ini tidak diambil: paketnya sudah lewat atau
-     * terlalu mepet untuk dijual. Post-nya sekalian masuk banned_posts supaya
+     * terlalu mepet untuk dijual. Post-nya sekalian masuk excluded_posts supaya
      * tidak di-scrap lagi. Tanggal tanpa keberangkatan (null) tetap lolos —
      * belum bisa dinilai, jadi jangan dibuang.
      */

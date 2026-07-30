@@ -12,7 +12,7 @@
  * Bentuk data yang dihasilkan identik dengan `fetch`, jadi extract-nya ga berubah.
  *
  * Tidak menyentuh Laravel: dipanggil oleh job lewat Process, dan satu-satunya
- * yang dibacanya dari DB adalah tabel banned_posts (bannedIds(), read-only PDO).
+ * yang dibacanya dari DB adalah tabel excluded_posts (excludedIds(), read-only PDO).
  */
 
 declare(strict_types=1);
@@ -54,15 +54,15 @@ function env(string $key, ?string $default = null): ?string
 }
 
 /**
- * media_id yang sudah dibanned: bukan penawaran paket, keberangkatannya sudah
+ * media_id yang sudah dikecualikan: bukan penawaran paket, keberangkatannya sudah
  * lewat, atau dibuang manual di halaman review. Jangan di-scrap lagi.
  *
  * Dibaca langsung dari SQLite-nya Laravel — cuma satu SELECT, tanpa boot framework.
- * Tabel belum ada / DB belum dimigrasi = tidak ada yang dibanned.
+ * Tabel belum ada / DB belum dimigrasi = tidak ada yang dikecualikan.
  *
  * @return array<string, true>
  */
-function bannedIds(): array
+function excludedIds(): array
 {
     static $ids = null;
     if ($ids !== null) {
@@ -77,12 +77,12 @@ function bannedIds(): array
 
     try {
         $pdo  = new PDO("sqlite:$db", options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-        $rows = $pdo->query('SELECT media_id FROM banned_posts')->fetchAll(PDO::FETCH_COLUMN);
+        $rows = $pdo->query('SELECT media_id FROM excluded_posts')->fetchAll(PDO::FETCH_COLUMN);
         foreach ($rows as $id) {
             $ids[(string) $id] = true;
         }
     } catch (Throwable $e) {
-        out('  (daftar banned tidak terbaca: ' . $e->getMessage() . ')');
+        out('  (daftar pengecualian tidak terbaca: ' . $e->getMessage() . ')');
     }
 
     return $ids;
@@ -200,6 +200,15 @@ dihakimi lebih dulu oleh model yang melihat flyernya — yang sampai ke kamu ber
 sudah lolos. Yang tanpa gambar belum dihakimi siapa pun, jadi `post_kind` tetap
 tugasmu.
 
+CAPTION DAN FLYER ITU SATU SUMBER, DIGABUNG:
+Kamu menerima dua blok — "Caption postingan" dan "Teks yang terbaca di flyer".
+Keduanya sama sahnya. Field yang tidak ada di flyer tapi ada di caption WAJIB
+diisi dari caption, dan sebaliknya: caption sering memuat tanggal berangkat,
+maskapai, fasilitas, atau kota yang tidak dicetak di flyer. Jangan pernah
+mengosongkan field yang jawabannya cuma ada di salah satu blok.
+Kalau keduanya bentrok soal angka yang sama (tanggal/harga beda), pakai flyer dan
+turunkan `confidence` grup itu di bawah 0.8.
+
 Tentukan `post_kind` dulu:
 - `package_offer` — menjual keberangkatan konkret. Cirinya ada tanggal/bulan
   berangkat, atau harga, DITAMBAH komponen perjalanan (maskapai / hotel / durasi hari).
@@ -222,19 +231,79 @@ yang dijual juga bukan paket.
 
 Aturan sisanya (hanya berlaku kalau `post_kind` = `package_offer`):
 - Isi `null` untuk field yang tidak disebutkan. JANGAN menebak, jangan mengarang.
-- `departure_date`: "YYYY-MM-DD" kalau tanggal pasti, "YYYY-MM" kalau cuma bulan.
-  Set `date_certainty` sesuai: exact / month / season (mis. "musim liburan") / unknown.
-- Harga Indonesia sering disingkat: "25jt" / "25 juta" = 25000000, "25,9jt" = 25900000.
-  Kalau tertulis "mulai dari" / "start from" / "*", set is_starting_from = true.
-- Harga dalam dolar ditulis apa adanya: "USD 3.300" -> amount 3300, currency "USD".
-  JANGAN dikonversi sendiri ke rupiah — kursnya diurus di luar.
+
+TANGGAL (`departure_date`) — format ketat, tidak ada bentuk lain yang diterima:
+- "YYYY-MM-DD" kalau hari, bulan, dan tahunnya semua tertulis -> date_certainty `exact`.
+- "YYYY-MM" kalau cuma bulan + tahun ("Maret 2027", "Awal April 2027") -> `month`.
+- null kalau lebih kabur dari itu. Tahun saja ("Berangkat Tahun 2027"), musim
+  ("musim liburan", "libur sekolah"), atau bulan Hijriah tanpa padanan Masehi
+  ("Ramadhan 1448") -> departure_date null, date_certainty `season`/`unknown`.
+  JANGAN mengarang tanggal 1, jangan menghitung sendiri konversi Hijriah.
+- Tanggalnya rentang ("03 - 11 Nov 2026", "3 s/d 11 November") -> ambil yang
+  PERTAMA (tanggal berangkat). Yang kedua itu tanggal pulang, bukan keberangkatan.
+- Hari + bulan tanpa tahun ("14 Maret") -> pakai tahun dari "Tanggal posting" yang
+  dilampirkan di bawah caption: ambil kejadian PERTAMA setelah tanggal posting itu.
+  Tidak ada tanggal posting -> null.
+- Satu flyer sering memuat beberapa keberangkatan. Ambil yang paling menonjol
+  (judul/paling besar); sisanya diabaikan, bukan digabung.
+
+HARGA (`price_tiers`) — cuma angka yang benar-benar tertulis sebagai harga paket:
+- "25jt" / "25 juta" = 25000000, "25,9jt" = 25900000, "Rp 25.900.000" = 25900000.
+- "mulai dari" / "start from" / "*" -> is_starting_from = true.
+- USD ditulis apa adanya: "USD 3.300" -> amount 3300, currency "USD". JANGAN
+  dikonversi sendiri ke rupiah — kursnya diurus di luar.
+- Cocokkan tipe kamarnya: sekamar 4/berempat = quad, 3/bertiga = triple,
+  2/berdua = double, sendiri = single. Tipe kamar tidak disebut tapi ada satu
+  harga -> quad (harga dasar/termurah).
+- BUKAN harga paket, jangan pernah dimasukkan: DP / uang muka / tanda jadi /
+  booking fee, cicilan per bulan, sisa pelunasan, biaya tambahan (visa progresif,
+  perlengkapan, handling), potongan diskon, dan harga paket LAIN yang cuma
+  disebut sebagai pembanding.
+- Angka yang bukan harga sama sekali: nomor telepon/WA, nomor izin PPIU, tahun,
+  jumlah kursi/jamaah, jarak hotel ke masjid (meter), bintang hotel, nomor
+  penerbangan. Jangan ada satu pun yang nyasar jadi amount.
+- Cuma ada DP atau cicilan, harga penuhnya tidak tertulis -> price_tiers []
+  (kosong), confidence.price 0. Jangan dikali-kali sendiri.
+- price_tiers [] itu jawaban yang sah dan lebih baik daripada angka karangan:
+  post tanpa harga memang tidak dipakai.
 - `departure_city`: kota tempat jamaah BERANGKAT (embarkasi). "Berangkat dari
   Jakarta", "CGK"/"Soekarno-Hatta" -> "Jakarta"; "SUB"/"Juanda" -> "Surabaya".
   Kota tujuan (Jeddah/Madinah), kota kantor travel, dan asal pembimbing
   ("Ustadz dari Jakarta") BUKAN kota keberangkatan — kalau cuma itu yang ada,
   isi null.
 - Kalau tipe kamar tidak disebut tapi ada satu harga, anggap `quad` (harga termurah/dasar).
+
+HOTEL (`hotel_makkah` / `hotel_madinah`) — SATU FIELD = SATU HOTEL:
 - Nama hotel disalin apa adanya ke `raw_name` ("setaraf Anjum" tetap ditulis penuh).
+- JANGAN pernah menaruh dua nama hotel di satu `raw_name`. "Maysan Al Maqom /
+  Dar Naeem" itu DUA hotel, bukan satu nama — pecah ke dua field.
+- Kecuali keterangan "setaraf": "Nada Ajyad / Setaraf", "Sofwah atau setaraf",
+  "Marwa Rotana / sekelas 5 star" itu SATU hotel plus catatan mutu — salin utuh
+  ke satu field, jangan dianggap dua hotel dan jangan dibuang catatannya.
+- Flyer paling sering cuma menulis "Hotel Pilihan" lalu dua nama tanpa label kota.
+  Dua nama = satu Makkah, satu Madinah. Tentukan mana yang mana dari nama
+  hotelnya sendiri: hotel di Madinah biasanya bernama Dar/Daar (Dar Naeem, Dar
+  Al Iman), Saja, Frontel Al Harithia, Emaar Royal, Anwar Al Madinah Movenpick;
+  di Makkah biasanya Maysan, Anjum, Jabal Omar, Swissotel, Fairmont, Hilton
+  Suites, Al Kiswah, Grand Zamzam.
+- Kalau kamu tidak yakin kota mana untuk nama-nama itu: nama PERTAMA -> Makkah,
+  nama KEDUA -> Madinah (urutan tulis flyer Indonesia), dan `confidence.hotels`
+  WAJIB di bawah 0.8 supaya masuk review manusia.
+- Cuma SATU nama hotel disebut tanpa label kota -> taruh di `hotel_makkah`,
+  `hotel_madinah` null, `confidence.hotels` di bawah 0.8.
+- Ada label kotanya ("Makkah: …", "Madinah: …") -> ikut labelnya, jangan pakai
+  urutan, dan confidence boleh tinggi.
+
+FASILITAS:
+- `facilities_raw`: SALIN SEMUA keunggulan/fasilitas yang disebut, dari flyer
+  MAUPUN caption, apa adanya, dipisah koma. Termasuk yang tidak ada kodenya di
+  `facilities`: "Direct Flight", "2x Jum'atan", "Bonus Menginap di Thaif",
+  "Kereta Cepat Haramain", "Kajian Tematik", "Ticket Confirmed", "All In",
+  "Terima beres". Ini yang dibaca calon jamaah — jangan diringkas, jangan
+  dibuang cuma karena tidak masuk enum.
+- `facilities` cuma kode dari enum yang benar-benar tertulis. "All In" saja tidak
+  berarti semua kode boleh diisi — biarkan `facilities` pendek, `facilities_raw`
+  yang panjang.
 - `guide_name`: pembimbing/ustadz yang memimpin rombongan, kalau disebut. Salin apa
   adanya beserta gelarnya ("Ustadz Muhammad Nuzul Dzikri", "Ustadz H. Heri Suyadi, S.Kom").
   Ini pembimbing rombongan, bukan muthawif lokal dan bukan nama pemilik travel.
@@ -276,6 +345,7 @@ function graphGet(string $url): array
     foreach ($usage as $name => $val) {
         out("    $name: $val");
     }
+    lastAppUsage(json_decode($usage['x-app-usage'] ?? '', true) ?: []);
 
     if ($body === false) {
         throw new RuntimeException('curl gagal');
@@ -298,6 +368,68 @@ function graphGet(string $url): array
         throw new RuntimeException("Graph API HTTP $code: $msg" . ($hint ? "\n       -> $hint" : ''));
     }
     return $json;
+}
+
+/**
+ * Persen kuota app dari header `x-app-usage` request terakhir, sudah di-decode.
+ *
+ * Meta tidak pernah mengirim waktu reset untuk limit tingkat app:
+ * `estimated_time_to_regain_access` cuma ada di `x-business-use-case-usage`, dan
+ * header itu tidak pernah dikirim di jalur `business_discovery`. Jadi satu-satunya
+ * cara tahu limitnya sudah keluar atau belum = tembak request lalu baca headernya.
+ * Jendelanya bergulir 1 jam, jadi angkanya turun sendiri tanpa dipancing.
+ *
+ * @return array{call_count?: int, total_cputime?: int, total_time?: int}
+ */
+function lastAppUsage(?array $set = null): array
+{
+    static $usage = [];
+    if ($set !== null) {
+        $usage = $set;
+    }
+    return $usage;
+}
+
+/**
+ * Cek kuota tiap app tanpa membakar kuota. Request-nya GET id akun sendiri: satu
+ * field, tanpa ekspansi apa pun — yang mengikat itu `total_time`, dan request
+ * sekecil ini nyaris nol dibanding `business_discovery` + `children{}`.
+ *
+ * App yang sedang kena `#4` tetap membalas headernya (403 + `x-app-usage`), jadi
+ * angkanya terbaca justru saat paling dibutuhkan. >= 100 di salah satu dari tiga
+ * angka = masih diblokir. Polling: `watch -n60 php probe.php quota`.
+ */
+function cmdQuota(array $argv): void
+{
+    $version = env('IG_GRAPH_VERSION', 'v25.0');
+    $creds   = igCreds();
+
+    foreach ($creds as $i => $cred) {
+        $url = sprintf(
+            'https://graph.facebook.com/%s/%s?fields=id&access_token=%s',
+            $version,
+            $cred['user'],
+            urlencode($cred['token']),
+        );
+        try {
+            graphGet($url);
+            $status = 'bebas';
+        } catch (RuntimeException $e) {
+            $status = str_contains($e->getMessage(), 'rate limit')
+                ? 'KENA LIMIT'
+                : trim(strtok($e->getMessage(), "\n"));
+        }
+        $u = lastAppUsage();
+        out(sprintf(
+            'app %d/%d  call_count %s%%  cputime %s%%  total_time %s%%  -> %s',
+            $i + 1,
+            count($creds),
+            $u['call_count']    ?? '?',
+            $u['total_cputime'] ?? '?',
+            $u['total_time']    ?? '?',
+            $status,
+        ));
+    }
 }
 
 /**
@@ -362,18 +494,20 @@ function cmdFetch(array $argv): void
 
     // thumbnail_url dipakai untuk VIDEO/Reels — flyer sering diposting sebagai Reels,
     // dan media_url untuk video isinya mp4 yang ga bisa dikirim ke vision LLM.
+    // like_count/comments_count dibuang: tidak pernah dibaca di mana pun, dan yang
+    // mengikat kuota Graph itu total_time — field lebih sedikit = response lebih murah.
     $fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,'
-        . 'like_count,comments_count,children{id,media_type,media_url,thumbnail_url}';
+        . 'children{id,media_type,media_url,thumbnail_url}';
 
     $after   = null;
     $count   = 0;
     $skipped = 0;
     $scanned = 0;
-    $banned  = bannedIds();
+    $excluded  = excludedIds();
 
-    out(sprintf('fetch @%s limit=%d (%d post dibanned, dilewat)', $username, $limit, count($banned)));
+    out(sprintf('fetch @%s limit=%d (%d post dikecualikan, dilewat)', $username, $limit, count($excluded)));
 
-    // ponytail: batas pindai supaya akun yang isinya banned semua tidak bikin
+    // ponytail: batas pindai supaya akun yang isinya dikecualikan semua tidak bikin
     // paginasi jalan sampai habis. Naikkan kalau backlognya memang panjang.
     $scanLimit = max(50, $limit * 3);
 
@@ -447,11 +581,11 @@ function cmdFetch(array $argv): void
             $scanned++;
             $id = (string) $post['id'];
 
-            // Sudah dibanned: tidak ada gunanya di-download lagi, dan sengaja TIDAK
-            // dihitung ke $limit — "9 post, 2 dibanned" berarti ambil 7 yang lain.
-            if (isset($banned[$id])) {
+            // Sudah dikecualikan: tidak ada gunanya di-download lagi, dan sengaja TIDAK
+            // dihitung ke $limit — "9 post, 2 dikecualikan" berarti ambil 7 yang lain.
+            if (isset($excluded[$id])) {
                 $skipped++;
-                out("  $id dilewat: sudah dibanned");
+                out("  $id dilewat: sudah dikecualikan");
                 continue;
             }
             // Sudah ada di disk: rawnya masih dipakai untuk flyer, jangan di-download ulang.
@@ -813,13 +947,13 @@ function cmdExtract(array $argv): void
     $done = 0;
     $visionCalls = 0;
     $ditolak = 0;
-    $banned  = bannedIds();
+    $excluded  = excludedIds();
 
     foreach (glob(RAW_DIR . '/*/*/post.json') ?: [] as $postFile) {
         if ($done >= $limit) {
             break;
         }
-        // Antrian db (prune / tombol ×) memindahkan raw ke storage/trash sementara
+        // Antrian db (prune / tombol ×) menghapus folder raw sementara
         // antrian ai masih menyusuri hasil glob-nya — folder yang lenyap di tengah
         // jalan bukan galat, cukup dilewat. Sama seperti claimImages().
         $json = @file_get_contents($postFile);
@@ -835,8 +969,8 @@ function cmdExtract(array $argv): void
         if (!$force && glob(EXT_DIR . '/' . $post['id'] . '{.json,-*.json}', GLOB_BRACE)) {
             continue;
         }
-        if (isset($banned[(string) $post['id']])) {
-            out("  {$post['id']} dilewat: sudah dibanned");
+        if (isset($excluded[(string) $post['id']])) {
+            out("  {$post['id']} dilewat: sudah dikecualikan");
             continue;
         }
 
@@ -875,7 +1009,7 @@ function cmdExtract(array $argv): void
 
         if ($verdict !== null && $verdict['post_kind'] !== 'package_offer') {
             // Ditolak di gerbang: simpan alasan + transkripnya saja. Penyusun tidak
-            // dipanggil, dan `packages:import --prune` yang membanned + memindahkannya.
+            // dipanggil, dan `packages:import --prune` yang mengecualikan + memindahkannya.
             $data = ['post_kind' => $verdict['post_kind'], '_rejected_by' => 'vision'];
             writeExtraction(EXT_DIR . '/' . $post['id'] . '.json', $data, $post, $verdict['flyer_text'], null);
             $ditolak++;
@@ -909,7 +1043,7 @@ function cmdExtract(array $argv): void
                 strlen($offer['text']),
             ));
 
-            $data = callExtractor($models, $caption, $offer['text']);
+            $data = callExtractor($models, $caption, $offer['text'], $post['timestamp'] ?? null);
             $data = writeExtraction(
                 EXT_DIR . "/$label.json",
                 $data,
@@ -1239,11 +1373,16 @@ function llmPostAny(array $models, array $payload): string
  * Penyusun: teks (caption + transkrip flyer) -> JSON. Tidak pernah menerima gambar.
  * Ganti provider = ganti AI_API_URL + AI_API_KEY + EXTRACT_MODEL.
  */
-function callExtractor(array $models, string $caption, string $flyerText): array
+function callExtractor(array $models, string $caption, string $flyerText, ?string $postedAt = null): array
 {
     $prompt = "Caption postingan:\n\n" . ($caption === '' ? '(kosong)' : $caption);
     if ($flyerText !== '') {
         $prompt .= "\n\nTeks yang terbaca di flyer:\n\n$flyerText";
+    }
+    // Flyer sering menulis "14 Maret" tanpa tahun. Tanpa jangkar ini model menebak
+    // tahun berjalan dan paket 2027 masuk sebagai 2026 — lolos filter ambang.
+    if ($postedAt !== null) {
+        $prompt .= "\n\nTanggal posting: " . substr($postedAt, 0, 10);
     }
 
     // Router mengabaikan `json_schema` (diuji 2026-07-29: prompt prosa tetap dibalas
@@ -1399,6 +1538,11 @@ function cmdSelftest(): void
     // Angka 0 jangan dianggap kosong (duration_days 0 itu data salah, tapi bukan "hilang").
     assert(!in_array('duration_days', missingFields(['duration_days' => 0] + $full), true));
 
+    // x-app-usage yang absen jangan menimpa angka terakhir dengan sampah.
+    lastAppUsage(['total_time' => 42]);
+    assert(lastAppUsage() === ['total_time' => 42]);
+    assert(lastAppUsage([]) === [], 'header hilang -> kosong, bukan angka basi');
+
     // Pemilihan URL gambar per tipe media: hanya IMAGE.
     assert(imageUrlOf(['media_type' => 'IMAGE', 'media_url' => 'a.jpg']) === 'a.jpg');
     assert(imageUrlOf(['media_type' => 'VIDEO', 'media_url' => 'v.mp4', 'thumbnail_url' => 't.jpg']) === null,
@@ -1536,6 +1680,7 @@ try {
         'auth'     => cmdAuth($argv),
         'fetch'    => cmdFetch($argv),
         'fetchall' => cmdFetchAll($argv),
+        'quota'    => cmdQuota($argv),
         'seed'     => cmdSeed($argv),
         'extract'  => cmdExtract($argv),
         'selftest' => cmdSelftest(),
@@ -1543,6 +1688,7 @@ try {
             "php probe.php auth <short_lived_user_token>\n" .
             "php probe.php fetch <username> [--limit=50]\n" .
             "php probe.php fetchall [accounts.txt] [--limit=50] [--sleep=3] [--retry]\n" .
+            "php probe.php quota\n" .
             "php probe.php seed <dir>\n" .
             "php probe.php extract [--limit=200] [--force]\n" .
             "php probe.php selftest"

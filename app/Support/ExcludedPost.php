@@ -8,14 +8,15 @@ use Illuminate\Support\Facades\DB;
  * Daftar post yang tidak perlu di-scrap lagi.
  *
  * Tanpa model: cuma insert idempoten + satu SELECT. probe.php membaca tabel yang
- * sama langsung lewat PDO (`bannedIds()`), jadi fetch tidak men-download ulang dan
+ * sama langsung lewat PDO (`excludedIds()`), jadi fetch tidak men-download ulang dan
  * extract tidak membayar model untuk post yang sudah dibuang.
  *
- * Alasan: `bukan_paket` (gerbang vision / saringan struktural), `sebelum_ambang`
+ * Alasan: `bukan_paket` (gerbang vision / saringan struktural), `haji` (haji khusus,
+ * bukan umroh), `sebelum_ambang`
  * (keberangkatan di bawah config `umroh.min_departure`), `manual` (tombol × di
  * halaman review).
  */
-class BannedPost
+class ExcludedPost
 {
     public static function add(?string $mediaId, ?string $account, string $reason, ?string $note = null): void
     {
@@ -23,7 +24,7 @@ class BannedPost
             return;
         }
 
-        DB::table('banned_posts')->updateOrInsert(
+        DB::table('excluded_posts')->updateOrInsert(
             ['media_id' => $mediaId],
             [
                 'source_account' => $account,

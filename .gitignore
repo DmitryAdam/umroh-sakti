@@ -25,5 +25,8 @@ Thumbs.db
 
 # probe.php artifacts
 /storage/raw
+/storage/trash
 /storage/extracted
 /storage/hashes.json
+/storage/feedback.jsonl
+/storage/pipeline.jsonl

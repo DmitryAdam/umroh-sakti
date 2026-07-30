@@ -91,13 +91,13 @@ return new class extends Migration
 
         // Post yang tidak perlu di-scrap lagi: bukan penawaran paket, keberangkatannya
         // sebelum ambang, atau dibuang manual. probe.php membacanya langsung lewat PDO
-        // (bannedIds()) supaya fetch tidak men-download ulang dan extract tidak
+        // (excludedIds()) supaya fetch tidak men-download ulang dan extract tidak
         // membayar model untuk post yang sama.
-        Schema::create('banned_posts', function (Blueprint $table) {
+        Schema::create('excluded_posts', function (Blueprint $table) {
             $table->id();
             $table->string('media_id')->unique();
             $table->string('source_account')->nullable();
-            $table->string('reason'); // bukan_paket|sebelum_ambang|manual
+            $table->string('reason'); // bukan_paket|haji|sebelum_ambang|manual
             $table->text('note')->nullable();
             $table->timestamps();
         });
@@ -105,7 +105,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('banned_posts');
+        Schema::dropIfExists('excluded_posts');
         Schema::dropIfExists('packages');
         Schema::dropIfExists('source_accounts');
     }

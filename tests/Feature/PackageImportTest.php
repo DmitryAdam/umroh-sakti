@@ -145,8 +145,8 @@ class PackageImportTest extends TestCase
         $this->assertSame(0, Package::count());
     }
 
-    /** --prune memindahkan yang bukan penawaran ke storage/trash, bukan menghapusnya. */
-    public function test_prune_memindahkan_post_bukan_penawaran_ke_trash(): void
+    /** --prune menghapus file post yang bukan penawaran; jejaknya di excluded_posts. */
+    public function test_prune_menghapus_post_bukan_penawaran(): void
     {
         $dir = storage_path('framework/testing/extracted');
         is_dir($dir) || mkdir($dir, 0775, true);
@@ -157,12 +157,10 @@ class PackageImportTest extends TestCase
 
         $this->artisan('packages:import', ['--dir' => $dir, '--prune' => true])->assertSuccessful();
 
-        $trash = storage_path('trash/agen_test/trash1/extracted.json');
-        $this->assertFileExists($trash, 'post buangan wajib bisa dicek ulang, bukan hilang');
         $this->assertFileDoesNotExist("$dir/0.json");
+        $this->assertDirectoryDoesNotExist(storage_path('raw/agen_test/trash1'));
         $this->assertSame(0, Package::count());
-
-        File::deleteDirectory(storage_path('trash/agen_test'));
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'trash1']);
     }
 
     /**
@@ -195,39 +193,228 @@ class PackageImportTest extends TestCase
         $this->assertSame(0, Package::count());
     }
 
-    /** Teaser tanpa harga tetap masuk selama ada tanggal + satu sinyal lain. */
-    public function test_paket_tanpa_harga_tetap_masuk_review(): void
+    /**
+     * Harga wajib. Postnya TIDAK dikecualikan: harga yang gagal terbaca itu
+     * kegagalan model, bukan vonis atas postnya — ekstraksi ulang harus bisa
+     * memungutnya lagi.
+     */
+    public function test_paket_tanpa_harga_tidak_diimpor_tapi_postnya_tidak_dikecualikan(): void
     {
         $this->import($this->extraction([
+            '_media_id' => 'nolharga',
             'price_tiers' => [],
-            'hotel_makkah' => null,
-            'hotel_madinah' => null,
-            'airline' => null,
             '_needs_review' => true,
         ]));
 
-        $this->assertSame('review', Package::sole()->status);
+        $this->assertSame(0, Package::count(), 'tanpa harga jangan masuk');
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'nolharga']);
     }
 
-    /** Keberangkatan sebelum ambang tidak diimpor, dan post-nya dibanned. */
-    public function test_keberangkatan_sebelum_ambang_dibanned(): void
+    /** Harga 0 itu hasil baca yang gagal, bukan paket gratis. */
+    public function test_harga_nol_ditolak_seperti_tanpa_harga(): void
+    {
+        $this->import($this->extraction([
+            'price_tiers' => [['occupancy' => 'quad', 'amount' => 0, 'currency' => 'IDR']],
+        ]));
+
+        $this->assertSame(0, Package::count());
+    }
+
+    /** Keberangkatan sebelum ambang tidak diimpor, dan post-nya dikecualikan. */
+    public function test_keberangkatan_sebelum_ambang_dikecualikan(): void
     {
         config(['umroh.min_departure' => '2026-08-01']);
 
         $this->import($this->extraction(['_media_id' => 'lewat1', 'departure_date' => '2026-07-14']));
 
         $this->assertSame(0, Package::count(), 'keberangkatan sebelum Agustus jangan masuk');
-        $this->assertDatabaseHas('banned_posts', ['media_id' => 'lewat1', 'reason' => 'sebelum_ambang']);
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'lewat1', 'reason' => 'sebelum_ambang']);
     }
 
-    /** Tanggal kosong belum bisa dinilai — jangan ikut dibuang oleh ambang. */
-    public function test_tanpa_tanggal_tidak_kena_ambang(): void
+    /**
+     * Ekstraksi ulang atas post yang barisnya sudah ada tidak boleh menabrak
+     * UNIQUE (media_id, flyer_index).
+     *
+     * dedup_key ikut berubah kalau modelnya membaca "Saudia" jadi "Saudia Airlines",
+     * jadi pencarian lewat dedup_key saja tidak menemukan baris lamanya lalu
+     * create() melempar UniqueConstraintViolation — dan itu membatalkan sisa
+     * backlog, bukan cuma satu file. Pernah kejadian: 150 hasil ekstraksi
+     * menganggur, jumlah paket mandek di 52.
+     */
+    public function test_ekstraksi_ulang_tidak_menabrak_unique(): void
+    {
+        $doc = $this->extraction(['_media_id' => 'ulang1', '_useful_images' => ['0.jpg']]);
+        $this->import($doc);
+
+        // Baca ulang yang sedikit beda: airline lebih lengkap -> dedup_key baru.
+        $this->import($this->extraction([
+            '_media_id' => 'ulang1',
+            '_useful_images' => ['0.jpg'],
+            'airline' => 'Saudia Airlines',
+        ]));
+
+        $this->assertSame(1, Package::where('media_id', 'ulang1')->count(),
+            'baris yang sama jangan digandakan dan jangan bikin import meledak');
+        $this->assertSame('Saudia', Package::sole()->airline,
+            'baris lama tidak ditimpa — status hasil review manusia ada di situ');
+    }
+
+    /**
+     * Slide yang ditolak tidak boleh menyeret post-nya kalau slide lain jadi paket.
+     *
+     * Folder raw dipakai bersama satu carousel: kalau ikut dihapus,
+     * `Package::flyers()` yang glob ke storage/raw balik kosong dan paket
+     * saudaranya tampil tanpa gambar. Mengecualikan media_id-nya juga memblokir
+     * fetch + extract untuk slide yang justru laku. Slide penolaknya sengaja
+     * ditaruh lebih dulu — urutan file tidak boleh menentukan hasil.
+     */
+    public function test_slide_ditolak_tidak_mengecualikan_post_yang_slide_lain_jadi_paket(): void
+    {
+        $this->import(
+            $this->extraction([
+                '_media_id' => 'carousel1',
+                '_useful_images' => ['0.jpg'],
+                'post_kind' => 'education',
+                'departure_date' => null,
+                'duration_days' => null,
+                'price_tiers' => [],
+            ]),
+            $this->extraction(['_media_id' => 'carousel1', '_useful_images' => ['1.jpg']]),
+        );
+
+        $this->assertSame(1, Package::where('media_id', 'carousel1')->count(),
+            'slide penawarannya tetap harus masuk');
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'carousel1']);
+    }
+
+    /** Kalau TIDAK ada slide yang jadi paket, post-nya memang dikecualikan. */
+    public function test_semua_slide_ditolak_maka_postnya_dikecualikan(): void
+    {
+        $this->import($this->extraction([
+            '_media_id' => 'carousel2',
+            'post_kind' => 'education',
+            'departure_date' => null,
+            'duration_days' => null,
+            'price_tiers' => [],
+        ]));
+
+        $this->assertSame(0, Package::count());
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'carousel2', 'reason' => 'bukan_paket']);
+    }
+
+    /**
+     * Haji khusus bukan umroh — jangan masuk portal.
+     *
+     * Yang gampang salah: menyaring pakai "haji khusus"/"haji plus" mentah. Itu
+     * kop surat travel ("UMROH & HAJI PLUS"), paketnya umroh beneran.
+     */
+    public function test_haji_khusus_tidak_diimpor_tapi_nama_travel_berbau_haji_tetap_lolos(): void
+    {
+        $this->import(
+            $this->extraction([
+                '_media_id' => 'haji1',
+                'duration_days' => 24,
+                '_flyer_text' => "AMMAR TOUR\nVisa Haji Resmi\nHaji Khusus\nMAKTAB VIP 24 Hari\nNomor Porsi",
+            ]),
+            $this->extraction([
+                '_media_id' => 'umroh1',
+                '_flyer_text' => "UMROH & HAJI PLUS\nUmroh 9 Hari\nIzin Haji : 2109\nIzin Umroh : 2109",
+            ]),
+        );
+
+        $this->assertSame(['umroh1'], Package::pluck('media_id')->all(),
+            'nama travel yang memuat "haji plus" bukan penanda paketnya haji');
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'haji1', 'reason' => 'haji']);
+    }
+
+    /**
+     * Flyer haji sering cuma menulis tahun. Cast `date` membaca "2027" sebagai unix
+     * timestamp dan barisnya masuk bertanggal 1970 — ikut terurut paling awal dan
+     * lolos semua filter rentang.
+     */
+    public function test_tanggal_tidak_lengkap_disimpan_kosong_bukan_1970(): void
+    {
+        $this->import($this->extraction(['_media_id' => 'tahun1', 'departure_date' => '2027']));
+
+        $this->assertSame(0, Package::count(), 'tahun saja bukan tanggal — jangan masuk, jangan jadi 1970');
+    }
+
+    /** Bulan saja tetap dipakai: tanggal 1 + kepastian `month`, bukan `exact`. */
+    public function test_bulan_saja_jadi_tanggal_satu_dengan_kepastian_month(): void
+    {
+        $this->import($this->extraction([
+            'departure_date' => '2026-09',
+            'date_certainty' => 'exact',   // kata model, tapi tanggalnya tidak lengkap
+        ]));
+
+        $package = Package::sole();
+        $this->assertSame('2026-09-01', $package->departure_date->toDateString());
+        $this->assertSame('month', $package->date_certainty);
+    }
+
+    /** Setter model ikut menjaga, bukan cuma import — worker bisa memegang kode lama. */
+    public function test_setter_menolak_tanggal_yang_tidak_lengkap(): void
+    {
+        $this->assertNull((new Package(['departure_date' => '2027']))->departure_date);
+    }
+
+    /**
+     * Akun yang sama memposting paket yang sama dua kali dengan ejaan beda:
+     * "Qashr Al Anshar" vs "Qasr Al Anshar", "Saudia, Garuda" vs "Saudia / Garuda".
+     * Dulu jadi dua baris (#76 dan #89) padahal isinya identik.
+     */
+    public function test_ejaan_dan_pemisah_yang_beda_tetap_satu_paket(): void
+    {
+        $this->import(
+            $this->extraction([
+                '_media_id' => 'ejaan1',
+                'airline' => 'Saudia, Garuda Indonesia',
+                'hotel_madinah' => ['raw_name' => 'Qashr Al Anshar', 'nights' => 3],
+            ]),
+            $this->extraction([
+                '_media_id' => 'ejaan2',
+                'airline' => 'Saudia / Garuda Indonesia',
+                'hotel_madinah' => ['raw_name' => 'Qasr Al Anshar', 'nights' => 3],
+            ]),
+        );
+
+        $this->assertSame(1, Package::count(), 'ejaan hotel & pemisah maskapai bukan paket berbeda');
+    }
+
+    /** Flyer paling sering tidak menulis kota berangkat karena Jakarta dianggap tahu. */
+    public function test_kota_kosong_jadi_jakarta(): void
+    {
+        $this->import($this->extraction(['departure_city' => null]));
+
+        $this->assertSame('Jakarta', Package::sole()->departure_city);
+    }
+
+    /** "9 hari" inklusif: berangkat 15 Agustus, pulang 23 Agustus. */
+    public function test_tanggal_pulang_dihitung_dari_durasi(): void
+    {
+        $package = new Package(['departure_date' => '2026-08-15', 'duration_days' => 9]);
+
+        $this->assertSame('2026-08-23', $package->returnDate()->toDateString());
+        // Nama bulannya ikut locale aplikasi — yang diuji bentuk rentangnya.
+        $this->assertSame('15 Aug – 23 Aug 2026', $package->dateLabel());
+        $this->assertNull((new Package(['duration_days' => 9]))->returnDate());
+    }
+
+    /**
+     * Tanpa tanggal paket tidak bisa dicari maupun diurut: ditolak. Tapi bukan
+     * lewat ambang keberangkatan (itu vonis permanen + mengecualikan postnya),
+     * melainkan lewat syarat kelengkapan yang postnya dibiarkan bisa dicoba lagi.
+     */
+    public function test_tanpa_tanggal_ditolak_tapi_postnya_tidak_dikecualikan(): void
     {
         config(['umroh.min_departure' => '2026-08-01']);
 
-        $this->import($this->extraction(['departure_date' => null, '_needs_review' => true]));
+        $this->import($this->extraction([
+            '_media_id' => 'notgl', 'departure_date' => null, '_needs_review' => true,
+        ]));
 
-        $this->assertSame(1, Package::count());
+        $this->assertSame(0, Package::count());
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'notgl']);
     }
 
     /**

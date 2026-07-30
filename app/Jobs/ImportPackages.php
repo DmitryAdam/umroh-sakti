@@ -10,8 +10,8 @@ use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Artisan;
 
 /**
- * Pilah + masuk DB. `--prune` memindahkan post yang bukan penawaran paket ke
- * storage/trash, jadi storage/raw isinya cuma yang lanjut.
+ * Pilah + masuk DB. `--prune` menghapus post yang bukan penawaran paket, jadi
+ * storage/raw isinya cuma yang lanjut.
  *
  * Import-nya idempoten (dedup_key + updateOrCreate per media_id), jadi aman
  * dijalankan berkali-kali atas backlog yang sama.

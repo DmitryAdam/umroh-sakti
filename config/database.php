@@ -41,7 +41,12 @@ return [
             'busy_timeout' => 10000,
             'journal_mode' => 'wal',
             'synchronous' => 'normal',
-            'transaction_mode' => 'DEFERRED',
+            // IMMEDIATE, bukan DEFERRED. Transaksi deferred mulai sebagai pembaca lalu
+            // naik jadi penulis; upgrade itu balas SQLITE_BUSY seketika (BUSY_SNAPSHOT)
+            // dan TIDAK menghormati busy_timeout — makanya ImportPackages mati
+            // "database is locked" dalam 2 ms padahal timeout-nya 10 detik. IMMEDIATE
+            // ambil write lock di awal, jadi yang kalah menunggu, bukan gagal.
+            'transaction_mode' => 'IMMEDIATE',
         ],
 
         'mysql' => [

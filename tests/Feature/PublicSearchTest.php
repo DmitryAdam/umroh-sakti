@@ -63,8 +63,8 @@ class PublicSearchTest extends TestCase
         $this->assertSame('review', $package->status, 'feedback bukan jalur publish');
     }
 
-    /** Tombol X: paketnya hilang dan post sumbernya pindah ke storage/trash, bukan lenyap. */
-    public function test_tombol_buang_menghapus_paket_dan_memindahkan_sumbernya(): void
+    /** Tombol X: paketnya hilang dan raw post sumbernya ikut dihapus. */
+    public function test_tombol_buang_menghapus_paket_dan_sumbernya(): void
     {
         $package = $this->package([
             'status' => 'review',
@@ -88,9 +88,9 @@ class PublicSearchTest extends TestCase
 
         $this->assertSame(0, Package::count());
         $this->assertDirectoryDoesNotExist($raw);
-        $this->assertFileExists(storage_path('trash/agen_x/buang1/post.json'));
 
-        File::deleteDirectory(storage_path('trash/agen_x'));
+        // Yang menjaga post ini tidak di-scrap lagi barisnya, bukan filenya.
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'buang1', 'reason' => 'manual']);
     }
 
     /**
@@ -116,9 +116,9 @@ class PublicSearchTest extends TestCase
 
         $this->assertSame(1, Package::count());
         $this->assertFileExists("$raw/post.json", 'flyer slide lain ikut hilang');
-        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('banned_posts')
+        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('excluded_posts')
             ->where('media_id', 'carousel1')->count(),
-            'post yang masih punya paket lain tidak boleh dibanned');
+            'post yang masih punya paket lain tidak boleh dikecualikan');
 
         File::deleteDirectory(storage_path('raw/agen_y'));
     }
@@ -133,7 +133,44 @@ class PublicSearchTest extends TestCase
 
         $this->getJson('/pipeline/status')
             ->assertOk()
-            ->assertJsonStructure(['sekarang', 'akun', 'terfetch', 'antrian', 'raw', 'extracted', 'paket', 'jalan']);
+            ->assertJsonStructure([
+                'sekarang', 'akun', 'terfetch', 'antrian',
+                'post_diunduh', 'post_menunggu', 'post_dibaca', 'post_dikecualikan',
+                'paket', 'draft', 'review', 'published', 'jalan',
+            ]);
+    }
+
+    /**
+     * Corong pipeline: tiap tahap dihitung dari sumbernya, tidak ada tabel progress.
+     * Yang gampang salah itu pecahan status paket — kalau `published` ikut kehitung
+     * di `review`, panel bilang ada yang sudah tampil publik padahal belum.
+     */
+    public function test_corong_pipeline_memecah_status_paket_dan_alasan_pengecualian(): void
+    {
+        app()['env'] = 'local';
+        config(['app.env' => 'local']);
+
+        $this->package(['status' => 'review', 'media_id' => 'a']);
+        $this->package(['status' => 'review', 'media_id' => 'b']);
+        $this->package(['status' => 'draft', 'media_id' => 'c']);
+        $this->package(['status' => 'published', 'media_id' => 'd']);
+
+        \Illuminate\Support\Facades\DB::table('excluded_posts')->insert([
+            ['media_id' => 'x1', 'reason' => 'bukan_paket', 'created_at' => now(), 'updated_at' => now()],
+            ['media_id' => 'x2', 'reason' => 'bukan_paket', 'created_at' => now(), 'updated_at' => now()],
+            ['media_id' => 'x3', 'reason' => 'sebelum_ambang', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $this->getJson('/pipeline/status')
+            ->assertOk()
+            ->assertJson([
+                'paket' => 4,
+                'review' => 2,
+                'draft' => 1,
+                'published' => 1,
+                'post_dikecualikan' => 3,
+                'alasan' => ['bukan_paket' => 2, 'sebelum_ambang' => 1],
+            ]);
     }
 
     /**
@@ -254,5 +291,50 @@ class PublicSearchTest extends TestCase
             ->assertSee('Data per')
             ->assertSee('konfirmasi langsung ke travel', false)
             ->assertSee('https://instagram.com/p/abc', false);
+    }
+
+    /** Lightbox mengambil potongan yang sama lewat fetch — tanpa layout. */
+    public function test_detail_lewat_ajax_balas_potongan_tanpa_layout(): void
+    {
+        $p = $this->package(['source_account' => 'agen_a', 'media_id' => 'm1']);
+
+        $this->get(route('package.show', $p), ['X-Requested-With' => 'XMLHttpRequest'])
+            ->assertOk()
+            ->assertSee('konfirmasi langsung ke travel', false)
+            ->assertDontSee('<html', false);
+    }
+
+    /**
+     * Pilihan filter diambil dari data yang benar-benar ada, bukan daftar tetap:
+     * nilai yang tidak dipakai satu barispun tidak boleh muncul, dan yang ada
+     * dibawa lengkap dengan jumlahnya.
+     */
+    public function test_pilihan_filter_diambil_dari_data_yang_ada(): void
+    {
+        $this->package(['airline' => 'Saudia']);
+        $this->package(['airline' => 'Saudia']);
+        $this->package(['airline' => 'Oman Air']);
+        $this->package(['airline' => 'Qatar Airways', 'status' => 'draft']);   // belum published
+
+        $this->get('/')->assertOk()
+            ->assertSee('Saudia (2)')
+            ->assertSee('Oman Air (1)')
+            ->assertDontSee('Qatar Airways');
+    }
+
+    public function test_filter_durasi_dan_pencarian_bebas(): void
+    {
+        $panjang = $this->package(['departure_city' => 'Solo', 'duration_days' => 14,
+            'guide_name' => 'Ustadz Fulan']);
+        $pendek = $this->package(['departure_city' => 'Medan', 'duration_days' => 9]);
+
+        $this->get('/?duration_min=12')->assertOk()
+            ->assertSee(route('package.show', $panjang), false)
+            ->assertDontSee(route('package.show', $pendek), false);
+
+        // Cari bebas menyapu pembimbing/hotel/kota/maskapai sekaligus.
+        $this->get('/?q=fulan')->assertOk()
+            ->assertSee(route('package.show', $panjang), false)
+            ->assertDontSee(route('package.show', $pendek), false);
     }
 }

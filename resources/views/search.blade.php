@@ -5,75 +5,126 @@
 {{-- Di lokal semua status tampil apa adanya, tanpa spanduk: yang sudah dibuang
      lewat × memang hilang dari tabel. Toggle `?semua=0` tetap ada kalau perlu. --}}
 @unless ($preview ?? false)
-    <p class="mb-3 text-xs text-stone-500">Cuma paket published yang tampil.</p>
+    <p class="mb-4 text-sm text-muted-foreground">Cuma paket published yang tampil.</p>
 @endunless
 
 @if ($preview ?? false)
-    {{-- Panel pipeline: tombolnya cuma melempar job, `php artisan queue:work` yang kerja. --}}
-    <div class="mb-3 rounded border border-stone-200 bg-white px-3 py-2 text-xs">
-        <div class="flex flex-wrap items-center gap-3">
-            <button type="button" data-pipeline
-                    class="rounded bg-stone-900 px-2 py-1 text-xs text-white disabled:opacity-40">Jalankan pipeline</button>
-            <div class="h-1.5 w-40 overflow-hidden rounded bg-stone-200">
-                <div data-bar class="h-full w-0 bg-stone-900 transition-all"></div>
-            </div>
-            <span data-progress class="text-stone-500">memuat…</span>
-            <a href="{{ route('search') }}" data-refresh class="ml-auto hidden text-stone-900 underline">muat ulang</a>
-            <a href="{{ route('accounts') }}" class="text-stone-500 underline">daftar akun</a>
-        </div>
-
-        {{-- Satu baris per antrian: yang sedang dikerjakan masing-masing worker. --}}
-        <div data-now class="mt-2 grid gap-1 sm:grid-cols-3"></div>
-
-        {{-- Jejak detail, langsung dari stdout probe.php. --}}
-        <details class="mt-2 border-t border-stone-100 pt-2" data-logbox>
-            <summary class="cursor-pointer text-[11px] text-stone-500">jejak detail</summary>
-            <pre data-log class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-stone-50 p-2 font-mono text-[10px] leading-tight text-stone-600"></pre>
-        </details>
-    </div>
+    {{-- Panel pipeline pindah ke /akun: halaman ini khusus buat mencari paket. --}}
+    <p class="mb-4 text-sm text-muted-foreground">
+        Pratinjau lokal. <a href="{{ route('accounts') }}" class="font-medium text-foreground underline underline-offset-4">daftar akun &amp; pipeline</a>
+    </p>
 @endif
 
-<p class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600">
-    <span><span data-count>{{ $packages->count() }}</span> paket</span>
-    <span class="text-stone-400">urut</span>
+@php
+    // Label select facet. Kuncinya = param query di PackageSearchController::FACETS.
+    $labelFacet = [
+        'city' => 'kota berangkat',
+        'airline' => 'maskapai',
+        'akun' => 'akun sumber',
+        'extension' => 'extension',
+        'certainty' => 'kepastian tanggal',
+        'status' => 'status',
+    ];
+    // Semua yang bukan urutan/pratinjau dihitung sebagai filter aktif.
+    $aktif = array_filter(request()->except(['sort', 'semua']), fn ($v) => is_scalar($v) && $v !== '');
+@endphp
+
+<x-ui.card as="details" class="mb-4 px-4 py-3" :open="(bool) $aktif">
+    <summary class="flex cursor-pointer select-none items-center gap-2 text-sm font-medium">
+        Filter
+        @if ($aktif)<x-ui.badge variant="default">{{ count($aktif) }}</x-ui.badge>@endif
+    </summary>
+
+    {{-- Satu form GET untuk semua filter. Pilihan select diambil dari data yang
+         benar-benar ada (facets), jadi tidak ada opsi yang hasilnya nol. --}}
+    <form method="GET" action="{{ route('search') }}" class="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <input type="hidden" name="sort" value="{{ $sort }}">
+        @if (request()->has('semua'))<input type="hidden" name="semua" value="{{ request('semua') }}">@endif
+
+        <x-ui.field label="cari" class="sm:col-span-2">
+            <x-ui.input name="q" value="{{ request('q') }}" placeholder="hotel, pembimbing, kota, maskapai…" />
+        </x-ui.field>
+
+        @foreach ($facets as $param => $pilihan)
+            {{-- Kolom dengan satu nilai saja tidak perlu select (status saat publik). --}}
+            @continue (count($pilihan) < 2)
+            <x-ui.field :label="$labelFacet[$param]">
+                <x-ui.select name="{{ $param }}" onchange="this.form.submit()">
+                    <option value="">semua ({{ $pilihan->sum() }})</option>
+                    @foreach ($pilihan as $nilai => $jumlah)
+                        <option value="{{ $nilai }}" @selected(request($param) === (string) $nilai)>{{ $nilai }} ({{ $jumlah }})</option>
+                    @endforeach
+                </x-ui.select>
+            </x-ui.field>
+        @endforeach
+
+        <x-ui.field label="berangkat">
+            <span class="flex gap-2">
+                <x-ui.input type="date" name="from" value="{{ request('from') }}" min="{{ config('umroh.min_departure') }}" />
+                <x-ui.input type="date" name="to" value="{{ request('to') }}" min="{{ config('umroh.min_departure') }}" />
+            </span>
+        </x-ui.field>
+
+        <x-ui.field label="durasi (hari)">
+            <span class="flex gap-2">
+                @foreach (['duration_min' => 'min', 'duration_max' => 'maks'] as $param => $label)
+                    <x-ui.select name="{{ $param }}" onchange="this.form.submit()">
+                        <option value="">{{ $label }}</option>
+                        @foreach ($durations as $hari)
+                            <option value="{{ $hari }}" @selected(request($param) == $hari)>{{ $hari }}</option>
+                        @endforeach
+                    </x-ui.select>
+                @endforeach
+            </span>
+        </x-ui.field>
+
+        <x-ui.field label="harga (rupiah, tier mana saja)">
+            <span class="flex gap-2">
+                <x-ui.input type="number" name="min_price" value="{{ request('min_price') }}" step="1000000" min="0" placeholder="min" />
+                <x-ui.input type="number" name="max_price" value="{{ request('max_price') }}" step="1000000" min="0" placeholder="maks" />
+            </span>
+        </x-ui.field>
+
+        <x-ui.field label="hotel">
+            <x-ui.input name="hotel" value="{{ request('hotel') }}" placeholder="nama hotel" />
+        </x-ui.field>
+
+        <div class="flex flex-wrap items-center justify-end gap-2 sm:col-span-3 lg:col-span-4">
+            @if ($aktif)
+                <x-ui.button as="a" variant="ghost" size="sm"
+                             href="{{ request()->fullUrlWithQuery(array_map(fn () => null, $aktif)) }}">reset</x-ui.button>
+            @endif
+            <x-ui.button size="sm">Terapkan</x-ui.button>
+        </div>
+    </form>
+</x-ui.card>
+
+<div class="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <span class="text-muted-foreground"><span data-count>{{ $packages->count() }}</span> paket</span>
+    <span class="ml-auto text-xs text-muted-foreground">urut</span>
     @foreach (App\Http\Controllers\PackageSearchController::SORTS as $key => $label)
         {{-- fullUrlWithQuery: filter yang sedang aktif ikut kebawa. --}}
-        <a href="{{ request()->fullUrlWithQuery(['sort' => $key]) }}"
-           @class(['font-medium text-stone-900' => $sort === $key, 'text-stone-500 underline' => $sort !== $key])>{{ $label }}</a>
+        <x-ui.button as="a" size="sm" :variant="$sort === $key ? 'secondary' : 'ghost'"
+                     href="{{ request()->fullUrlWithQuery(['sort' => $key]) }}">{{ $label }}</x-ui.button>
     @endforeach
+</div>
 
-    {{-- Rentang keberangkatan. `type=date` bawaan browser, tanpa JS & tanpa library. --}}
-    <span class="text-stone-400">berangkat</span>
-    <input type="date" name="from" form="rentang" value="{{ request('from') }}" min="{{ config('umroh.min_departure') }}"
-           class="rounded border-stone-300 px-1 py-0.5 text-xs">
-    <span class="text-stone-400">s/d</span>
-    <input type="date" name="to" form="rentang" value="{{ request('to') }}" min="{{ config('umroh.min_departure') }}"
-           class="rounded border-stone-300 px-1 py-0.5 text-xs">
-    <button form="rentang" class="rounded bg-stone-900 px-2 py-0.5 text-xs text-white">terapkan</button>
-    @if (request('from') || request('to'))
-        <a href="{{ request()->fullUrlWithQuery(['from' => null, 'to' => null]) }}" class="text-stone-500 underline">hapus</a>
-    @endif
-</p>
-
-{{-- Filter lain (kota, maskapai, sort, pratinjau) ikut kebawa saat rentangnya diganti. --}}
-<form id="rentang" method="GET" action="{{ route('search') }}">
-    @foreach (array_filter(request()->except(['from', 'to']), 'is_scalar') as $name => $value)
-        <input type="hidden" name="{{ $name }}" value="{{ $value }}">
-    @endforeach
-</form>
-
-<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
     @forelse ($packages as $package)
         @php $flyers = $package->flyers(); @endphp   {{-- sudah disaring ke gambar yang memuat detail paket --}}
-        <article id="p{{ $package->id }}" class="relative flex scroll-mt-4 flex-col overflow-hidden rounded border border-stone-200 bg-white text-xs">
+        {{-- Seluruh kartu membuka lightbox (lihat JS di bawah), bukan cuma judulnya.
+             Sengaja tanpa overlay <a> yang menutupi kartu: overlay itu memakan
+             gesture geser carousel flyernya. --}}
+        <x-ui.card as="article" id="p{{ $package->id }}"
+                   class="relative flex cursor-pointer scroll-mt-20 flex-col overflow-hidden p-0 transition-shadow hover:shadow-md">
             @if ($preview ?? false)
                 <button type="button" data-delete="{{ route('package.destroy', $package) }}" title="Bukan flyer umroh — buang"
-                        class="absolute right-1 top-1 z-10 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-sm leading-none text-white hover:bg-red-600">&times;</button>
+                        class="absolute right-2 top-2 z-10 grid size-7 place-items-center rounded-full bg-foreground/60 text-sm leading-none text-background hover:bg-destructive">&times;</button>
             @endif
 
             @if ($flyers)
                 {{-- Carousel pakai scroll-snap bawaan browser: geser/swipe, tanpa JS. --}}
-                <div class="relative bg-stone-100">
+                <div class="relative bg-muted">
                     <div class="flex snap-x snap-mandatory overflow-x-auto">
                         @foreach ($flyers as $url)
                             <img src="{{ $url }}" alt="Flyer dari &#64;{{ $package->source_account }}" loading="lazy"
@@ -81,190 +132,122 @@
                         @endforeach
                     </div>
                     @if (count($flyers) > 1)
-                        <span class="pointer-events-none absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[10px] text-white">{{ count($flyers) }}</span>
+                        <span class="pointer-events-none absolute bottom-2 right-2 rounded-md bg-foreground/60 px-1.5 py-0.5 text-[10px] text-background">{{ count($flyers) }}</span>
                     @endif
                 </div>
             @endif
 
-            <div class="flex flex-1 flex-col gap-0.5 p-2 leading-snug">
+            <div class="flex flex-1 flex-col gap-1.5 p-4 text-sm">
+                {{-- Lightbox: href-nya tetap halaman detail, jadi tanpa JS / klik-tengah
+                     tetap jalan. Yang di-klik biasa dicegat dan diambil lewat fetch. --}}
                 <a href="{{ route('package.show', ['package' => $package] + (($preview ?? false) ? ['semua' => 1] : [])) }}"
-                   class="font-medium hover:underline">
-                    <span class="font-mono text-[10px] text-stone-400">#{{ $package->id }}</span>
+                   data-detail class="font-semibold leading-snug tracking-tight hover:underline">
+                    <span class="font-mono text-[10px] font-normal text-muted-foreground">#{{ $package->id }}</span>
                     {{ $package->departure_city ?? 'Kota ?' }} &middot;
-                    {{ $package->duration_days ? $package->duration_days . 'h' : 'durasi ?' }}
+                    {{ $package->duration_days ? $package->duration_days . ' hari' : 'durasi ?' }}
                     @if ($package->extension !== 'none') &middot; +{{ $package->extension }} @endif
                 </a>
 
-                <p class="text-stone-600">
-                    {{ $package->departure_date?->translatedFormat('d M Y') ?? 'Tanggal ?' }}
-                    @if ($package->date_certainty !== 'exact')<span class="text-stone-400">({{ $package->date_certainty }})</span>@endif
+                <p class="text-xs text-muted-foreground">
+                    {{-- Rentang: tanggal pulang dihitung dari durasi, biar tidak dihitung sendiri. --}}
+                    {{ $package->dateLabel() ?? 'Tanggal ?' }}
+                    @if ($package->date_certainty !== 'exact')({{ $package->date_certainty }})@endif
                     @if ($package->airline) &middot; {{ $package->airline }} @endif
                 </p>
 
-                @foreach ($package->prices() as $occupancy => $amount)
-                    <p><span class="text-stone-500">{{ $occupancy }}</span>
-                        <span class="font-medium">{{ number_format($amount / 1000000, 1, ',', '.') }} jt</span>
-                        @if ($package->price_starting_from)<span class="text-[10px] text-stone-400">mulai</span>@endif
-                    </p>
-                @endforeach
-
-                @if ($package->convertedFromUsd())
-                    <p class="text-[10px] text-stone-400">konversi dari USD, kurs {{ number_format((int) config('umroh.usd_rate'), 0, ',', '.') }}</p>
+                @if ($harga = $package->prices())
+                    <dl class="mt-1 grid grid-cols-[auto_1fr] items-baseline gap-x-2">
+                        @foreach ($harga as $occupancy => $amount)
+                            <dt class="text-xs capitalize text-muted-foreground">{{ $occupancy }}</dt>
+                            <dd class="text-right font-medium tabular-nums">
+                                {{ number_format($amount / 1000000, 1, ',', '.') }} jt
+                                @if ($package->price_starting_from)<span class="text-[10px] font-normal text-muted-foreground">mulai</span>@endif
+                            </dd>
+                        @endforeach
+                    </dl>
                 @endif
 
-                @php $stays = array_filter(['Mkh' => $package->hotel_makkah, 'Mdn' => $package->hotel_madinah]); @endphp
+                @if ($package->convertedFromUsd())
+                    <p class="text-[10px] text-muted-foreground">konversi dari USD, kurs {{ number_format((int) config('umroh.usd_rate'), 0, ',', '.') }}</p>
+                @endif
+
+                @php $stays = array_filter(['Makkah' => $package->hotel_makkah, 'Madinah' => $package->hotel_madinah]); @endphp
                 @foreach ($stays as $city => $raw)
-                    <p class="text-stone-600"><span class="text-stone-400">{{ $city }}</span> {{ $raw }}</p>
+                    <p class="text-xs"><span class="text-muted-foreground">{{ $city }}</span> {{ $raw }}</p>
                 @endforeach
 
                 @if ($package->guide_name)
-                    <p class="text-stone-600"><span class="text-stone-400">Pmb</span> {{ $package->guide_name }}</p>
+                    <p class="text-xs"><span class="text-muted-foreground">Pembimbing</span> {{ $package->guide_name }}</p>
                 @endif
 
-                @if ($package->reposts)
-                    <p class="text-stone-400">+{{ count($package->reposts) }} akun repost</p>
+                @if ($package->facilities_raw)
+                    {{-- Fasilitas apa adanya dari flyer/caption: `facilities` cuma kode
+                         yang kenal di FACILITY_CODES, sisanya cuma ada di sini. --}}
+                    <p class="truncate text-xs text-muted-foreground" title="{{ $package->facilities_raw }}">{{ $package->facilities_raw }}</p>
                 @endif
 
-                <p class="truncate">
+                <div class="mt-auto flex flex-wrap items-center gap-2 pt-2">
                     <a href="{{ $package->source_permalink }}" rel="nofollow noopener" target="_blank"
-                       class="text-stone-500 underline @if (! $package->source_permalink) pointer-events-none text-stone-300 @endif"
+                       class="truncate text-xs text-muted-foreground underline underline-offset-4 @if (! $package->source_permalink) pointer-events-none opacity-50 @endif"
                     >&#64;{{ $package->source_account ?? '-' }}</a>
-                </p>
+                    @if ($package->reposts)
+                        <x-ui.badge variant="outline">+{{ count($package->reposts) }} repost</x-ui.badge>
+                    @endif
+                </div>
 
                 @include('partials.warnings')
 
-                @if ($preview ?? false)
-                    <details class="mt-1 border-t border-stone-100 pt-1">
-                        <summary class="cursor-pointer text-[10px] text-stone-400">catatan &amp; jejak</summary>
-
-                        <p class="mt-1 select-all break-all font-mono text-[10px] leading-tight text-stone-400">
-                            {{ $package->status }} &middot; conf={{ $package->confidence ?? '-' }}<br>
-                            raw/{{ $package->source_account }}/{{ $package->media_id }}
-                        </p>
-
-                        <form method="POST" action="{{ route('package.feedback', $package) }}" data-feedback class="mt-1 space-y-1">
-                            @csrf
-                            <select name="review_verdict" required class="w-full rounded border-stone-300 py-0.5 text-[11px]">
-                                <option value="">— nilai —</option>
-                                @foreach (App\Models\Package::REVIEW_VERDICTS as $code => $label)
-                                    <option value="{{ $code }}" @selected($package->review_verdict === $code)>{{ $label }}</option>
-                                @endforeach
-                            </select>
-                            <input name="review_note" value="{{ $package->review_note }}" placeholder="salahnya di mana?"
-                                   class="w-full rounded border-stone-300 py-0.5 text-[11px]">
-                            <div class="flex items-center gap-1">
-                                <button class="rounded bg-stone-900 px-1.5 py-0.5 text-[11px] text-white">Simpan</button>
-                                <span data-status class="text-[10px] text-stone-400">
-                                    @if ($package->reviewed_at) dinilai @endif
-                                </span>
-                            </div>
-                        </form>
-                    </details>
-                @endif
+                {{-- "catatan & jejak" (form penilaian manusia) sementara dilepas dari
+                     kartu. Endpoint POST /paket/{id}/feedback masih ada. --}}
             </div>
-        </article>
+        </x-ui.card>
     @empty
-        <p class="col-span-full rounded border border-dashed border-stone-300 p-8 text-center text-sm text-stone-500">
+        <p class="col-span-full rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
             Belum ada paket. Jalankan fetch &rarr; extract &rarr; packages:import.
         </p>
     @endforelse
 </div>
 
+{{-- Lightbox detail. <dialog> bawaan browser: Esc & fokusnya sudah ditangani,
+     tidak ada library. Isinya potongan yang sama dengan halaman /paket/{id}. --}}
+<dialog id="lightbox" class="w-[min(46rem,92vw)] rounded-xl border bg-card p-0 text-card-foreground shadow-lg backdrop:bg-foreground/50">
+    <button type="button" data-close aria-label="tutup"
+            class="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground">&times;</button>
+    <div data-body class="max-h-[88vh] overflow-y-auto p-6"></div>
+</dialog>
+
+<script>
+const lightbox = document.getElementById('lightbox');
+const lightboxBody = lightbox.querySelector('[data-body]');
+
+document.addEventListener('click', async (event) => {
+    // Klik di mana saja dalam kartu = buka detailnya, kecuali kalau yang diklik
+    // memang punya aksi sendiri (tombol ×, link ke post asli).
+    const card = event.target.closest('article[id^=p]');
+    const link = event.target.closest('a[data-detail]')
+        || (card && !event.target.closest('a, button') ? card.querySelector('a[data-detail]') : null);
+
+    if (link && !event.metaKey && !event.ctrlKey && event.button === 0) {
+        event.preventDefault();
+        lightboxBody.innerHTML = '<p class="text-sm text-muted-foreground">memuat…</p>';
+        lightbox.showModal();
+        try {
+            const res = await fetch(link.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!res.ok) throw new Error(res.status);
+            lightboxBody.innerHTML = await res.text();
+        } catch (e) {
+            lightboxBody.innerHTML = '<p class="text-sm text-destructive">gagal memuat: ' + e.message + '</p>';
+        }
+        return;
+    }
+    // Klik di luar kotak = di backdrop, karena isinya dibungkus [data-body].
+    if (event.target.closest('[data-close]') || event.target === lightbox) lightbox.close();
+});
+</script>
+
 @if ($preview ?? false)
-{{-- Simpan catatan & buang kartu tanpa reload: halamannya panjang, reload tiap
-     aksi bikin posisi scroll balik ke atas terus. --}}
 <script>
 const csrf = document.querySelector('meta[name=csrf-token]').content;
-
-document.addEventListener('submit', async (event) => {
-    const form = event.target.closest('form[data-feedback]');
-    if (!form) return;
-    event.preventDefault();
-
-    const status = form.querySelector('[data-status]');
-    const set = (text, color) => { status.className = 'text-[10px] ' + color; status.textContent = text; };
-    set('menyimpan…', 'text-stone-400');
-
-    try {
-        const res = await fetch(form.action, {
-            method: 'POST',
-            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-            body: new FormData(form),
-        });
-        set(res.ok ? 'tersimpan' : 'gagal (' + res.status + ')', res.ok ? 'text-green-700' : 'text-red-600');
-    } catch (e) {
-        set('gagal: ' + e.message, 'text-red-600');
-    }
-});
-
-// Pipeline: tombol lempar job, sisanya polling angka dari server. Tidak ada
-// state progress yang disimpan — semuanya dihitung ulang dari raw/extracted/DB.
-const bar      = document.querySelector('[data-bar]');
-const progress = document.querySelector('[data-progress]');
-const now      = document.querySelector('[data-now]');
-const log      = document.querySelector('[data-log]');
-const escapeHtml = (text) => text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-const runButton = document.querySelector('[data-pipeline]');
-const refresh  = document.querySelector('[data-refresh]');
-let paketAwal  = null;
-
-// Warna per antrian, biar kelihatan bagian mana yang jalan tanpa harus dibaca.
-const WARNA = { ig: 'text-sky-700', ai: 'text-violet-700', db: 'text-emerald-700', run: 'text-stone-700' };
-
-const render = (n) => {
-    const persen = n.akun ? Math.round(n.terfetch / n.akun * 100) : 0;
-    bar.style.width = persen + '%';
-    progress.textContent = `${n.terfetch}/${n.akun} akun · ${n.raw} post · ${n.extracted} hasil ekstraksi`
-        + ` · ${n.paket} paket · ${n.dibanned} dibanned`
-        + (n.antrian ? ` · ${n.antrian} job antri` : ' · idle');
-    runButton.disabled = n.jalan;
-
-    // Tiga antrian jalan sendiri-sendiri: ig fetch, ai konversi, db import.
-    now.innerHTML = ['ig', 'ai', 'db'].map((q) => {
-        const pesan = n.sekarang?.[q];
-        return `<div class="truncate ${pesan ? WARNA[q] : 'text-stone-300'}">`
-            + `<span class="font-mono">${q}</span> ${pesan ? escapeHtml(pesan) : 'idle'}</div>`;
-    }).join('');
-
-    if (n.log?.length) {
-        const habis = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
-        // Satu baris = satu <div>: triple-click di <pre> menyorot seluruh blok,
-        // per-div bikin yang kecopy cuma barisnya.
-        log.innerHTML = n.log.map((baris) =>
-            `<div><span class="text-stone-400">${baris.t}</span> `
-            + `<span class="${WARNA[baris.q] ?? 'text-stone-500'}">${baris.q}</span> `
-            + escapeHtml(baris.m) + '</div>').join('');
-        if (habis) log.scrollTop = log.scrollHeight;   // jangan rebut scroll kalau sedang dibaca ke atas
-    }
-
-    if (paketAwal === null) paketAwal = n.paket;
-    refresh.classList.toggle('hidden', n.paket === paketAwal);
-    if (n.paket !== paketAwal) refresh.textContent = `${n.paket - paketAwal} paket baru — muat ulang`;
-};
-
-const poll = async () => {
-    try { render(await (await fetch('{{ route('pipeline.status') }}', { headers: { 'Accept': 'application/json' } })).json()); }
-    catch (e) { progress.textContent = 'status gagal: ' + e.message; }
-};
-
-if (runButton) {
-    poll();
-    setInterval(poll, 2000);
-
-    runButton.addEventListener('click', async () => {
-        runButton.disabled = true;
-        progress.textContent = 'mengantrikan…';
-        try {
-            render(await (await fetch('{{ route('pipeline.start') }}', {
-                method: 'POST',
-                headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrf },
-            })).json());
-        } catch (e) {
-            progress.textContent = 'gagal: ' + e.message;
-            runButton.disabled = false;
-        }
-    });
-}
 
 document.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-delete]');
@@ -287,7 +270,7 @@ document.addEventListener('click', async (event) => {
         button.disabled = false;
         card.style.opacity = 1;
         button.title = 'gagal: ' + e.message;
-        button.classList.add('bg-red-600');
+        button.classList.add('bg-destructive');
     }
 });
 </script>

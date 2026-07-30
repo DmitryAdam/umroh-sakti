@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Support\PipelineLog;
-use Illuminate\Process\Pool;
+use Illuminate\Contracts\Process\InvokedProcess;
 use Illuminate\Queue\Console\WorkCommand;
 use Illuminate\Support\Facades\Process;
 use Symfony\Component\Console\Input\InputOption;
@@ -84,37 +84,79 @@ class QueueWork extends WorkCommand
         $this->info("Worker jalan: ig×1 · ai×$ai · db×1. Ctrl+C untuk berhenti.");
         PipelineLog::write('run', "worker start: ig×1 ai×$ai db×1");
 
-        Process::pool(function (Pool $pool) use ($workers, $berhenti) {
-            foreach ($workers as $queue => $jumlah) {
-                for ($i = 1; $i <= $jumlah; $i++) {
-                    $nama = $jumlah > 1 ? "$queue$i" : $queue;
+        // Nama anak -> antriannya. Nama dipakai ulang saat menyalakan ulang supaya
+        // baris log tetap bisa dilacak ke worker yang sama.
+        $anak = [];
+        foreach ($workers as $queue => $jumlah) {
+            for ($i = 1; $i <= $jumlah; $i++) {
+                $anak[$jumlah > 1 ? "$queue$i" : $queue] = $queue;
+            }
+        }
 
-                    $pool->as($nama)
-                        ->path(base_path())
-                        // timeout(0): worker memang jalan terus sampai dihentikan.
-                        ->timeout(0)
-                        ->command([
-                            PHP_BINARY, 'artisan', 'queue:work',
-                            "--queue=$queue",
-                            "--name=$nama",
-                            '--sleep=2',
-                            '--tries=3',
-                            // Restart berkala: worker PHP yang hidup berjam-jam menahan
-                            // memori dan kode lama setelah file diubah.
-                            '--max-time=3600',
-                            ...$berhenti,
-                        ]);
+        $jalan = [];
+        foreach ($anak as $nama => $queue) {
+            $jalan[$nama] = $this->spawn($nama, $queue, $berhenti);
+        }
+
+        // JANGAN pakai Process::pool()->wait(): itu `->map->wait()`, jadi induk
+        // mengantre di anak pertama (`ig`) yang tidak pernah selesai dan tidak pernah
+        // membaca pipe anak lain. Buffer stdout `ai`/`db` penuh (64 KB), anaknya
+        // kebentur `write()`, dan antrian kelihatan mati padahal jobnya tersedia.
+        // `running()` memanggil `isRunning()` -> `readPipes()` -> callback di spawn(),
+        // jadi semua pipe ikut terkuras.
+        //
+        // Anak yang keluar dinyalakan lagi. `--max-time=3600` itu maunya restart
+        // berkala, tapi tidak ada yang menyalakan ulang: sejam sekali seluruh worker
+        // mati diam-diam, dan sampai mati itu mereka menahan kode lama di memori —
+        // pernah kejadian, import dari antrian mem-prune pakai aturan yang sudah
+        // diperbaiki 20 menit sebelumnya.
+        while ($jalan !== []) {
+            foreach ($jalan as $nama => $proses) {
+                if ($proses->running()) {
+                    continue;
                 }
-            }
-        })->start(function (string $type, string $chunk, string $key) {
-            foreach (preg_split('/\r?\n/', $chunk) as $line) {
-                if (trim($line) !== '') {
-                    PipelineLog::write((string) $key, $line);
-                    $this->line("[$key] ".trim($line));
+
+                // --once / --stop-when-empty: anak memang disuruh berhenti, jangan
+                // dihidupkan lagi — kalau tidak, perintahnya tidak pernah selesai.
+                if ($berhenti !== []) {
+                    unset($jalan[$nama]);
+
+                    continue;
                 }
+
+                PipelineLog::write('run', "worker $nama keluar, nyalakan lagi");
+                $jalan[$nama] = $this->spawn($nama, $anak[$nama], $berhenti);
             }
-        })->wait();
+
+            usleep(200_000);
+        }
 
         return self::SUCCESS;
+    }
+
+    /** Satu worker antrian, output-nya diteruskan ke pipeline.jsonl + stdout induk. */
+    private function spawn(string $nama, string $queue, array $berhenti): InvokedProcess
+    {
+        return Process::path(base_path())
+            // timeout(0): worker memang jalan terus sampai dihentikan.
+            ->timeout(0)
+            ->start([
+                PHP_BINARY, 'artisan', 'queue:work',
+                "--queue=$queue",
+                "--name=$nama",
+                '--sleep=2',
+                '--tries=3',
+                // Restart berkala: worker PHP yang hidup berjam-jam menahan memori
+                // dan kode lama setelah file diubah. Yang menyalakan lagi: loop di handle().
+                '--max-time=3600',
+                ...$berhenti,
+            ], function (string $type, string $chunk) use ($nama) {
+                foreach (preg_split('/\r?\n/', $chunk) as $line) {
+                    if (trim($line) !== '') {
+                        PipelineLog::write($nama, $line);
+                        $this->line("[$nama] ".trim($line));
+                    }
+                }
+            });
     }
 }
