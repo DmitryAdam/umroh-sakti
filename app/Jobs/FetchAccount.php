@@ -25,9 +25,17 @@ class FetchAccount implements ShouldQueue
 {
     use Queueable;
 
-    public int $tries = 3;
-
     public int $timeout = 900;
+
+    /**
+     * Batas waktu, bukan hitungan percobaan. Tiap akun yang antri di lock `ig-fetch`
+     * kena release — dan release menaikkan `attempts`. Dengan `tries` biasa, akun
+     * ke-4 dst mati `MaxAttemptsExceeded` sebelum dapat giliran, bukan karena error.
+     */
+    public function retryUntil(): \DateTimeInterface
+    {
+        return now()->addHours(2);
+    }
 
     public function __construct(
         public SourceAccount $account,

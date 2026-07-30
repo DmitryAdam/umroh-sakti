@@ -21,7 +21,10 @@ sekali jalan.
 **Post yang sudah dibuang jangan di-scrap lagi.** Tabel `banned_posts` (media_id,
 reason) diisi saat post ditolak: `bukan_paket`, `sebelum_ambang`, `manual` (tombol ×).
 `probe.php` membacanya langsung lewat PDO — `fetch` tidak men-download ulang dan
-`extract` tidak membayar model dua kali. Konsekuensinya `--limit` menghitung post
+`extract` tidak membayar model dua kali. Kecuali: tombol × pada satu slide
+carousel yang slide lainnya masih jadi paket cuma menghapus barisnya — post-nya
+tidak dibanned dan rawnya tidak dipindah ke trash, karena folder raw itu dipakai
+bersama dan sibling-nya akan kehilangan flyer. Konsekuensinya `--limit` menghitung post
 *baru*: 9 post dengan 2 dibanned = ambil 7 sisanya, bukan 9.
 
 **Keberangkatan sebelum `config('umroh.min_departure')` tidak diambil** (default
@@ -30,6 +33,14 @@ Tanggal kosong tetap lolos — belum bisa dinilai, biar manusia yang lihat.
 
 **Jangan auto-publish harga.** Harga dengan confidence < 0.8 atau field wajib
 kosong wajib masuk review queue. Tidak ada jalur yang melewati review manusia.
+
+**Harga USD dikonversi ke IDR saat import, bukan saat ekstraksi.** Sebagian
+travel memasang "USD 3.300" di flyer. Ekstraksi menulisnya apa adanya
+(`amount` 3300, `currency` USD); `ImportExtractedPackages::toIdr()` mengalikan
+`config('umroh.usd_rate')` (`UMROH_USD_RATE`, default 16500) supaya kolom harga
+selalu satu satuan — kalau tidak, angkanya tampil "0,0 jt", selalu jadi paket
+termurah saat diurutkan, dan selalu memicu warning BPIU. Angka asli tetap di
+`raw_extraction`; UI menandai barisnya "konversi dari USD".
 
 **Satu paket = satu baris.** Tier harga tetap empat kolom di `packages`:
 `price_quad`/`price_triple`/`price_double`/`price_single` (`Package::PRICE_COLUMNS`) —
@@ -129,6 +140,12 @@ lebih panjang dari flyernya.
 Caption dulu — 60-70% info ada di sana dan jauh lebih murah. Vision hanya
 dipanggil kalau field wajib masih kosong setelah pass caption. Gambar yang
 hash-nya sudah pernah diproses dilewat (flyer rebranding dari puluhan akun agen).
+
+**Caption ikut dikirim ke vision**, bukan cuma ke penyusun: dipakai membaca yang
+buram/disingkat di flyer. Tapi cuma konteks — caption tidak boleh disalin ke
+`slides[].text` dan tidak menegakkan `has_price/has_date/has_duration`. Jadwal
+yang cuma ada di caption (munatour memuat enam tanggal di caption, satu per
+gambar di flyer) tetap tidak lolos gerbang untuk gambar yang tidak memuatnya.
 
 Semua panggilan model lewat **9router** (`AI_API_URL`, OpenAI-compatible): satu URL
 + satu `AI_API_KEY`, yang beda cuma `EXTRACT_MODEL` (penyusun) dan `VISION_MODEL`

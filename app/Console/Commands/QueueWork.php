@@ -56,6 +56,21 @@ class QueueWork extends WorkCommand
             return parent::handle();
         }
 
+        // Induk kedua = worker dobel. Anak yatim dari induk yang di-Ctrl+C tetap
+        // polling, jadi `ig` rebutan lock sampai kehabisan percobaan dan `db`
+        // saling tabrak insert. Cek proses, bukan lock — lock basi bikin macet baru.
+        // `--queue[=]`: pgrep hanya mengecualikan PID-nya sendiri, bukan pgrep lain
+        // yang jalan bersamaan — dan `--queue=` ada di argv pgrep itu sendiri, jadi
+        // dua induk yang start serentak saling melaporkan pgrep-nya. Kelas karakter
+        // bikin polanya tidak cocok dengan argv-nya sendiri.
+        $lain = trim(Process::run('pgrep -f "artisan queue:work --queue[=]"')->output());
+        if ($lain !== '') {
+            $this->error('Worker lama masih jalan: PID '.str_replace("\n", ' ', $lain));
+            $this->line('Hentikan dulu: pkill -f "artisan queue:work"');
+
+            return self::FAILURE;
+        }
+
         $ai = max(1, (int) $this->option('ai'));
         $workers = ['ig' => 1, 'ai' => $ai, 'db' => 1];
 

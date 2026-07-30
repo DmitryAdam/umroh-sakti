@@ -29,6 +29,12 @@
             </tr>
         @endforeach
     </table>
+    @if ($package->convertedFromUsd())
+        <p class="mt-1 text-xs text-stone-400">
+            Flyer memasang harga dalam USD. Angka di atas hasil konversi kurs
+            {{ number_format((int) config('umroh.usd_rate'), 0, ',', '.') }} — konfirmasi ke travel.
+        </p>
+    @endif
 
     <h2 class="mt-5 text-sm font-semibold uppercase tracking-wide text-stone-500">Hotel</h2>
     <ul class="mt-2 space-y-1 text-sm">

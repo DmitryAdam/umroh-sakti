@@ -151,6 +151,22 @@ class Package extends Model
         }
     }
 
+    /**
+     * Harga di flyernya USD; kolomnya sudah dikonversi ke IDR saat import
+     * (ImportExtractedPackages::toIdr). Angka rupiahnya hasil kurs, bukan
+     * angka yang tertulis — jadi ditandai di UI.
+     */
+    public function convertedFromUsd(): bool
+    {
+        foreach ($this->raw_extraction['price_tiers'] ?? [] as $tier) {
+            if (($tier['currency'] ?? 'IDR') === 'USD') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** Harga termurah, dipakai untuk sorting & facet harga. */
     public function lowestPrice(): ?int
     {

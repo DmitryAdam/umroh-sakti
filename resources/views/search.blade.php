@@ -113,6 +113,10 @@
                     </p>
                 @endforeach
 
+                @if ($package->convertedFromUsd())
+                    <p class="text-[10px] text-stone-400">konversi dari USD, kurs {{ number_format((int) config('umroh.usd_rate'), 0, ',', '.') }}</p>
+                @endif
+
                 @php $stays = array_filter(['Mkh' => $package->hotel_makkah, 'Mdn' => $package->hotel_madinah]); @endphp
                 @foreach ($stays as $city => $raw)
                     <p class="text-stone-600"><span class="text-stone-400">{{ $city }}</span> {{ $raw }}</p>

@@ -6,6 +6,7 @@ use App\Support\PipelineLog;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Artisan;
 
 /**
@@ -30,6 +31,25 @@ class ImportPackages implements ShouldBeUniqueUntilProcessing, ShouldQueue
     public function __construct()
     {
         $this->onQueue('db');
+    }
+
+    /**
+     * Unik-sampai-diproses cuma mencegah dobel di antrian, bukan dobel yang jalan
+     * bareng. Dua importer atas file yang sama sama-sama lolos cek `dedup_key`
+     * lalu sama-sama insert -> UNIQUE (media_id, flyer_index). Lock ini menyerikan.
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping('db-import'))
+                ->releaseAfter(5)
+                ->expireAfter($this->timeout),
+        ];
+    }
+
+    public function retryUntil(): \DateTimeInterface
+    {
+        return now()->addMinutes(30);
     }
 
     public function handle(): void

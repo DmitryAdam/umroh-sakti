@@ -93,6 +93,36 @@ class PublicSearchTest extends TestCase
         File::deleteDirectory(storage_path('trash/agen_x'));
     }
 
+    /**
+     * Satu carousel = beberapa paket. Buang satu slide tidak boleh menyeret raw
+     * post-nya ke trash: slide lain masih memakai gambar di folder yang sama.
+     */
+    public function test_buang_satu_slide_tidak_membuang_sumber_milik_slide_lain(): void
+    {
+        $buang = $this->package(['status' => 'review', 'media_id' => 'carousel1',
+            'source_account' => 'agen_y', 'flyer_index' => 1]);
+        $this->package(['status' => 'review', 'media_id' => 'carousel1',
+            'source_account' => 'agen_y', 'flyer_index' => 2, 'departure_date' => '2026-04-20']);
+
+        $raw = storage_path('raw/agen_y/carousel1');
+        File::ensureDirectoryExists($raw);
+        file_put_contents("$raw/post.json", '{}');
+
+        app()['env'] = 'local';
+        config(['app.env' => 'local']);
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $this->deleteJson("/paket/{$buang->id}")->assertOk();
+
+        $this->assertSame(1, Package::count());
+        $this->assertFileExists("$raw/post.json", 'flyer slide lain ikut hilang');
+        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('banned_posts')
+            ->where('media_id', 'carousel1')->count(),
+            'post yang masih punya paket lain tidak boleh dibanned');
+
+        File::deleteDirectory(storage_path('raw/agen_y'));
+    }
+
     /** Panel pipeline itu alat kerja lokal — jangan pernah kebuka di produksi. */
     public function test_panel_pipeline_dikunci_ke_lokal(): void
     {

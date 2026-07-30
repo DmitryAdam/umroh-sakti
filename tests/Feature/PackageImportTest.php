@@ -59,6 +59,21 @@ class PackageImportTest extends TestCase
         $this->assertSame(['visa', 'tiket', 'makan_3x'], $package->facilities);
     }
 
+    /** "USD 3.300" masuk apa adanya = 0,0 jt di UI dan selalu termurah saat diurutkan. */
+    public function test_harga_usd_dikonversi_ke_rupiah_saat_import(): void
+    {
+        config(['umroh.usd_rate' => 16500]);
+
+        $this->import($this->extraction(['price_tiers' => [
+            ['occupancy' => 'quad', 'amount' => 3300, 'currency' => 'USD', 'is_starting_from' => true],
+        ]]));
+
+        $package = Package::sole();
+        $this->assertSame(3300 * 16500, $package->price_quad);
+        $this->assertSame('IDR', $package->currency);
+        $this->assertTrue($package->convertedFromUsd(), 'asal USD wajib ditandai di UI');
+    }
+
     public function test_repost_dari_akun_lain_digabung_bukan_jadi_paket_baru(): void
     {
         $this->import(

@@ -104,6 +104,14 @@ class PackageSearchController extends Controller
     {
         abort_unless(app()->isLocal(), 404);
 
+        // Satu carousel bisa jadi beberapa paket (satu gambar = satu baris). Kalau
+        // slide lain dari post yang sama masih hidup, × cuma menyangkal baris ini:
+        // post-nya tidak dibanned dan rawnya tidak dipindah ke trash — kalau
+        // dipindah, semua paket sebelahnya kehilangan flyernya.
+        $punyaSaudara = Package::where('media_id', $package->media_id)
+            ->whereKeyNot($package->getKey())
+            ->exists();
+
         foreach ($package->posts() as $post) {
             File::append(storage_path('feedback.jsonl'), json_encode([
                 'media_id' => $post['media_id'],
@@ -114,7 +122,9 @@ class PackageSearchController extends Controller
                 'extraction' => $package->raw_extraction,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).PHP_EOL);
 
-            BannedPost::add(
+            // Ban = seluruh post tidak akan disentuh lagi. Cuma boleh kalau tidak
+            // ada slide lain dari post itu yang masih jadi paket.
+            $punyaSaudara || BannedPost::add(
                 $post['media_id'],
                 $post['account'],
                 'manual',
@@ -122,7 +132,7 @@ class PackageSearchController extends Controller
             );
         }
 
-        $package->trashSources();
+        $punyaSaudara || $package->trashSources();
         $package->delete();
 
         return response()->json(['deleted' => $package->id]);

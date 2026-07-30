@@ -226,6 +226,13 @@ Aturan sisanya (hanya berlaku kalau `post_kind` = `package_offer`):
   Set `date_certainty` sesuai: exact / month / season (mis. "musim liburan") / unknown.
 - Harga Indonesia sering disingkat: "25jt" / "25 juta" = 25000000, "25,9jt" = 25900000.
   Kalau tertulis "mulai dari" / "start from" / "*", set is_starting_from = true.
+- Harga dalam dolar ditulis apa adanya: "USD 3.300" -> amount 3300, currency "USD".
+  JANGAN dikonversi sendiri ke rupiah — kursnya diurus di luar.
+- `departure_city`: kota tempat jamaah BERANGKAT (embarkasi). "Berangkat dari
+  Jakarta", "CGK"/"Soekarno-Hatta" -> "Jakarta"; "SUB"/"Juanda" -> "Surabaya".
+  Kota tujuan (Jeddah/Madinah), kota kantor travel, dan asal pembimbing
+  ("Ustadz dari Jakarta") BUKAN kota keberangkatan — kalau cuma itu yang ada,
+  isi null.
 - Kalau tipe kamar tidak disebut tapi ada satu harga, anggap `quad` (harga termurah/dasar).
 - Nama hotel disalin apa adanya ke `raw_name` ("setaraf Anjum" tetap ditulis penuh).
 - `guide_name`: pembimbing/ustadz yang memimpin rombongan, kalau disebut. Salin apa
@@ -724,7 +731,7 @@ function cmdExtract(array $argv): void
         // dan tidak pernah dibayar ke penyusun.
         $verdict = null;
         if ($images !== []) {
-            $verdict = readFlyer($images);   // carousel = satu call, hasilnya per slide
+            $verdict = readFlyer($images, $caption);   // carousel = satu call, hasilnya per slide
             $visionCalls++;
             out(sprintf(
                 '  vision: post_kind=%s, %d/%d gambar berisi penawaran',
@@ -900,6 +907,10 @@ dan seterusnya. Masing-masing harus utuh sendiri.
 
 JANGAN menyimpulkan, menghitung, membetulkan, atau menerjemahkan apa pun.
 
+Caption postingannya ikut dilampirkan sebagai KONTEKS: pakai untuk membaca yang
+buram atau disingkat di gambar (nama hotel lengkap, kota keberangkatan, mata uang).
+Isi caption JANGAN disalin ke `text` — `text` hanya yang terlihat di gambar itu.
+
 Gambar yang tidak memuat teks berguna — foto suasana, dekorasi, logo saja, foto
 jamaah, kalender kosong — `text` diisi "(tidak ada teks)".
 
@@ -908,14 +919,16 @@ TUGAS 2 — putuskan, JUGA PER GAMBAR
 Untuk tiap entri `slides`, nilai dari apa yang BENAR-BENAR TERTULIS di gambar itu,
 bukan dari kesan atau niat postingannya. Isi ketiga penanda ini apa adanya:
 
-- `has_price`    : ada angka harga rupiah untuk paketnya. "25jt", "Rp 25.900.000",
-                   tabel harga per tipe kamar. DP/cicilan/angsuran BUKAN harga paket.
+- `has_price`    : ada angka harga untuk paketnya, rupiah ATAU USD. "25jt",
+                   "Rp 25.900.000", "USD 3.300", tabel harga per tipe kamar.
+                   DP/cicilan/angsuran BUKAN harga paket.
 - `has_date`     : ada tanggal atau bulan keberangkatan. "14 Maret 2026", "Maret 2026",
                    "Ramadhan 1447". Jadwal manasik atau tanggal acara BUKAN keberangkatan.
 - `has_duration` : ada lama perjalanan dalam hari. "9 Hari", "12D/11N", "9H8M".
 
 Ketiganya dinilai atas gambar itu SENDIRI. Kalau tanggal/durasi/harga cuma ada di
-gambar lain, penanda gambar ini tetap false — gerbang ini sengaja ketat.
+gambar lain ATAU cuma di caption, penanda gambar ini tetap false — gerbang ini
+sengaja ketat.
 
 `post_kind` (satu untuk seluruh postingan) = `package_offer` kalau ADA minimal satu
 gambar yang ketiga penandanya benar. Kalau tidak ada satu pun, pilih kategori lain —
@@ -947,11 +960,17 @@ TXT;
  *
  * @return array{post_kind: string, flyer_text: string}
  */
-function readFlyer(array $images): array
+function readFlyer(array $images, string $caption = ''): array
 {
     $content = [];
     foreach ($images as $b64) {
         $content[] = ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,' . $b64]];
+    }
+    // Caption ikut dikirim sebagai konteks: angka yang buram di flyer sering
+    // tertulis jelas di caption (daftar jadwal, kurs, nama hotel lengkap).
+    // Aturan "jangan disalin, jangan menegakkan penanda" ada di promptnya.
+    if ($caption !== '') {
+        $content[] = ['type' => 'text', 'text' => "Caption postingannya (konteks saja):\n\n$caption"];
     }
     $content[] = ['type' => 'text', 'text' => TRANSCRIBE_PROMPT];
 
@@ -1134,9 +1153,12 @@ function llmPost(string $url, string $key, array $payload): string
         curl_close($ch);
 
         // Timeout/koneksi putus di tengah batch panjang: coba lagi, jangan buang 100 post sebelumnya.
+        // Jeda naik 1/2/4s — ulang seketika biasanya kena kondisi yang sama.
         if ($body === false) {
-            if ($try < 2) {
-                out("    $err — ulangi");
+            if ($try < 3) {
+                $jeda = 1 << $try;
+                out("    $err — ulangi dalam {$jeda}s");
+                sleep($jeda);
                 continue;
             }
             throw new RuntimeException("curl gagal: $err");

@@ -12,6 +12,15 @@ return [
     'price_confidence_floor' => 0.8,
 
     /*
+     * Sebagian travel memasang harga dalam USD ("USD 3.300 sekamar berempat").
+     * Angkanya dikonversi ke IDR saat import supaya sorting harga dan warning
+     * BPIU tetap satu satuan; angka asli + mata uangnya tetap ada di
+     * raw_extraction. Kurs beku di baris paket — perbarui angkanya lalu
+     * re-import kalau kursnya bergerak jauh.
+     */
+    'usd_rate' => env('UMROH_USD_RATE', 16500),
+
+    /*
      * Keberangkatan sebelum tanggal ini tidak diambil: paketnya sudah lewat atau
      * terlalu mepet untuk dijual. Post-nya sekalian masuk banned_posts supaya
      * tidak di-scrap lagi. Tanggal tanpa keberangkatan (null) tetap lolos —

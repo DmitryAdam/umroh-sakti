@@ -252,14 +252,29 @@ class ImportExtractedPackages extends Command
                 || ! in_array("price_{$tier['occupancy']}", Package::PRICE_COLUMNS, true)) {
                 continue;
             }
-            $out["price_{$tier['occupancy']}"] = (int) $tier['amount'];
-            $out['currency'] = $tier['currency'] ?? 'IDR';
+            $out["price_{$tier['occupancy']}"] = $this->toIdr($tier);
+            $out['currency'] = 'IDR';
             // Satu tier "mulai dari" sudah cukup untuk menandai seluruh paket.
             $out['price_starting_from'] = ($out['price_starting_from'] ?? false)
                 || (bool) ($tier['is_starting_from'] ?? false);
         }
 
         return $out;
+    }
+
+    /**
+     * Flyer berharga USD dikonversi ke IDR di sini — satu-satunya tempatnya.
+     * Kalau tidak, "USD 3.300" masuk apa adanya lalu tampil "0,0 jt", selalu
+     * jadi paket termurah saat diurutkan, dan selalu memicu warning BPIU.
+     * Angka + mata uang aslinya tetap utuh di raw_extraction.
+     */
+    private function toIdr(array $tier): int
+    {
+        $amount = (int) $tier['amount'];
+
+        return ($tier['currency'] ?? 'IDR') === 'USD'
+            ? (int) round($amount * (float) config('umroh.usd_rate'))
+            : $amount;
     }
 
     /**
