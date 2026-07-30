@@ -1,0 +1,50 @@
+{
+    "post_kind": "package_offer",
+    "ppiu_name": "PT. Kartika Utama",
+    "license_number": null,
+    "departure_date": null,
+    "date_certainty": "exact",
+    "duration_days": null,
+    "departure_city": "Jakarta",
+    "airline": "Saudia Airlines",
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [
+        "tiket",
+        "hotel",
+        "makan_3x",
+        "muthawif",
+        "perlengkapan",
+        "handling",
+        "city_tour",
+        "asuransi"
+    ],
+    "facilities_raw": "Direct Flight, Hotel Makkah & Madinah Bintang 3 (Setara), gratis Tahallul Halq & Al Baik Chicken, Diskon langsung Rp 1 Juta \/ Jamaah",
+    "detail_images": [
+        1
+    ],
+    "confidence": {
+        "departure_date": 0.9,
+        "price": 0.9,
+        "hotels": 0.9,
+        "ppiu": 0.9
+    },
+    "_media_id": "17956598066980370",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DahMW5HG7Yy\/",
+    "_source": "haramainku",
+    "_posted_at": "2026-07-08T04:33:57+0000",
+    "_flyer_text": "--- gambar 1 ---\nHaramain KU\nHaramainKU\nUMROH Spesial SAUDIA Airlines\nDISKON 1 Jt \/ Jamaah\nFREE\nTahallul Halq\nAl Baik Chicken\nJejak Cahaya Rasul\n2X Jum'at\n3 Sep 2026\nfixed schedule\nUMROH SPESIAL\n10 hari\nSAUDIA Start JAKARTA\nHotel MAKKAH ★3\nNada Ajyad \/Setara\nHotel MADINAH ★3\nDurrat Al Eiman \/Setara\nQUAD\nRp. 31,9 Jt\nALL IN\n2x Jumat\n17 Sep 2026\nfixed schedule\nFully Booked\nUMROH ISTIQOMAH\n12 hari\nSAUDIA Start JAKARTA\nHotel MAKKAH ★3\nNada Ajyad \/Setara\nHotel MADINAH ★3\nDurrat Al Eiman \/Setara\nQUAD\nRp. 32,9 Jt\nALL IN\nTour Thaif\n7 Okt 2026\nfixed schedule\nFully Booked\nUMROH PROMO\n9 hari\nSAUDIA Start JAKARTA\nHotel MAKKAH ★3\nNada Ajyad \/Setara\nHotel MADINAH ★3\nDurrat Al Eiman \/Setara\nQUAD\nRp. 26,9 Jt\nALL IN\nSpesial Promo\n2X Jum'at\n22 Okt 2026\nfixed schedule\nUMROH SPESIAL\n10 hari\nSAUDIA Start JAKARTA\nHotel MAKKAH ★3\nNada Ajyad \/Setara\nHotel MADINAH ★3\nDurrat Al Eiman \/Setara\nQUAD\nRp. 31,9 Jt\nALL IN\n2x Jumat\nSAUDIA\nDirect Flight\nBiaya, Jadwal, dan Fasilitas dapat berubah sewaktu-waktu menyesuaikan kondisi konflik yang ada.\nPembayaran DP & Pelunasan wajib ke rekening RESMI PT. Kartika Utama,\nselain ke rekening resmi diluar tanggung jawab kami\nInformasi & Konsultasi\nMitra kebaikan\nMadinatul Qur'an\nBoarding School\nJonggol, Bogor\nHaramainKU",
+    "_used_vision": true,
+    "_useful_images": [
+        "0.jpg"
+    ],
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

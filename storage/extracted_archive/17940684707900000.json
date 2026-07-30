@@ -1,0 +1,33 @@
+{
+    "ppiu_name": "Bin Fahad Travel",
+    "license_number": null,
+    "departure_date": "2025-06",
+    "date_certainty": "month",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": null,
+    "extension": "unknown",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 1,
+        "price": 1,
+        "hotels": 1,
+        "ppiu": 1
+    },
+    "_media_id": "17940684707900000",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DLcYtyFTZB-\/",
+    "_source": "binfahad_travel",
+    "_posted_at": "2025-06-28T11:54:44+0000",
+    "_used_vision": true,
+    "_missing": [
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

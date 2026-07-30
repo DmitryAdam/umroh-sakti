@@ -1,0 +1,40 @@
+{
+    "post_kind": "education",
+    "ppiu_name": null,
+    "license_number": null,
+    "departure_date": null,
+    "date_certainty": "unknown",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "detail_images": [],
+    "confidence": {
+        "departure_date": 0,
+        "price": 0,
+        "hotels": 0,
+        "ppiu": 0
+    },
+    "_media_id": "18547929574072404",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DbVLV8PD2-k\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-28T09:05:30+0000",
+    "_flyer_text": "NAKHLA TOUR more than just traveling\nProgram 09 Hari\nUMRAH AKHIR JUMADIL AKHIR\nKeberangkatan 13 November 2026\nDibimbing Ustadz Abdul Aziz Al Owainy, Lc\nStart From Rp 43,40 Juta All In\nHubungi CS Nakhla Tour",
+    "_used_vision": true,
+    "_useful_images": [
+        "7.jpg"
+    ],
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

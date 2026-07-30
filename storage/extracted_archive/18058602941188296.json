@@ -1,0 +1,36 @@
+{
+    "ppiu_name": "PT. Bin Fahad Mubarak",
+    "license_number": "02202012124770002",
+    "departure_date": "2025-09-12",
+    "date_certainty": "exact",
+    "duration_days": 13,
+    "departure_city": "Jakarta",
+    "airline": null,
+    "guide_name": "Ustadz Fathi bin Yazid Jawas Hafidzahullahu Ta’ala",
+    "extension": "turki",
+    "price_tiers": [
+        {
+            "occupancy": "quad",
+            "amount": 39000000,
+            "currency": "IDR",
+            "is_starting_from": false
+        }
+    ],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 1,
+        "price": 0.9,
+        "hotels": 0,
+        "ppiu": 1
+    },
+    "_media_id": "18058602941188296",
+    "_permalink": "https:\/\/www.instagram.com\/reel\/DLAZU6eTpWI\/",
+    "_source": "binfahad_travel",
+    "_posted_at": "2025-06-17T15:03:09+0000",
+    "_used_vision": false,
+    "_missing": [],
+    "_needs_review": false
+}

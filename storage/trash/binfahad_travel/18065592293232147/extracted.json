@@ -1,0 +1,20 @@
+{
+    "post_kind": "promo_generic",
+    "_rejected_by": "vision",
+    "_media_id": "18065592293232147",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DM-ViLQTWc3\/",
+    "_source": "binfahad_travel",
+    "_posted_at": "2025-08-05T12:52:30+0000",
+    "_flyer_text": "--- gambar 1 ---\nBIN FAHAD TRAVEL\nTEBAK NAMA MASJID\nbinfahad_travel",
+    "_used_vision": true,
+    "_useful_images": [
+        "0.jpg"
+    ],
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

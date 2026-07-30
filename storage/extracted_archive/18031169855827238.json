@@ -1,0 +1,37 @@
+{
+    "ppiu_name": "Hamdan Tour",
+    "license_number": null,
+    "departure_date": null,
+    "date_certainty": "unknown",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": {
+        "raw_name": "Province Al Sham",
+        "nights": null
+    },
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 1,
+        "price": 1,
+        "hotels": 1,
+        "ppiu": 1
+    },
+    "_media_id": "18031169855827238",
+    "_permalink": "https:\/\/www.instagram.com\/reel\/DbM0tTnoTyW\/",
+    "_source": "hamdantour",
+    "_posted_at": "2026-07-25T03:16:51+0000",
+    "_used_vision": false,
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

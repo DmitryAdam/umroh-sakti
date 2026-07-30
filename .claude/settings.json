@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -n '/private function prune/,/^    }/p' app/Console/Commands/ImportExtractedPackages.php)",
+      "Bash(php artisan *)",
+      "Bash(php -l app/Jobs/ExtractPending.php)",
+      "Bash(curl -sk -m 60 https://9router.jinno.my.id/v1/chat/completions -H \"Authorization: Bearer sk-d9dc0e3850099303-97e0c3-85afdce9\" -H \"Content-Type: application/json\" -d '{\"model\":\"gemini/gemini-3.1-flash-lite-preview\",\"messages\":[{\"role\":\"user\",\"content\":\"balas JSON {\\\\\"ok\\\\\":true} saja\"}],\"response_format\":{\"type\":\"json_object\"}}')"
+    ],
+    "additionalDirectories": [
+      "/Users/masmit5d/Documents/source-code/umroh-sakti/app/Console/Commands"
+    ]
+  }
+}

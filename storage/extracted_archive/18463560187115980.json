@@ -1,0 +1,36 @@
+{
+    "ppiu_name": "Nakhla Tour",
+    "license_number": null,
+    "departure_date": "2026-10-04",
+    "date_certainty": "exact",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": "Al Ustadz Hamdi Solah Al Bakry",
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": {
+        "raw_name": "Dar Al Ghufron Hotel",
+        "nights": null
+    },
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 1,
+        "price": 0,
+        "hotels": 0.9,
+        "ppiu": 0.9
+    },
+    "_media_id": "18463560187115980",
+    "_permalink": "https:\/\/www.instagram.com\/reel\/DbDP-LkvirA\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-21T10:01:28+0000",
+    "_used_vision": false,
+    "_missing": [
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

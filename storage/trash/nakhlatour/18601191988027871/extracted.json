@@ -1,0 +1,58 @@
+{
+    "post_kind": "package_offer",
+    "ppiu_name": "NAKHLA TOUR",
+    "license_number": null,
+    "departure_date": null,
+    "date_certainty": "unknown",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [
+        {
+            "occupancy": "quad",
+            "amount": 47800000,
+            "currency": "IDR",
+            "is_starting_from": true
+        },
+        {
+            "occupancy": "quad",
+            "amount": 45000000,
+            "currency": "IDR",
+            "is_starting_from": true
+        },
+        {
+            "occupancy": "quad",
+            "amount": 60800000,
+            "currency": "IDR",
+            "is_starting_from": true
+        }
+    ],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": "Kajian Tematik, Kereta Cepat Haramain, Free Museum Wahyu Makkah, Makan di Al Romansiah",
+    "detail_images": [],
+    "confidence": {
+        "departure_date": 0.7,
+        "price": 0.9,
+        "hotels": 0,
+        "ppiu": 1
+    },
+    "_media_id": "18601191988027871",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DbKua-Hj-e1\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-24T07:40:23+0000",
+    "_flyer_text": "NAKHLA TOUR more than just traveling\nRamadhan Series\nUMROH RAMADHAN SERIES\nPilihan paket terbaik dari awal Ramadhan hingga i'tikaf Madinah\n1 SPESIAL AWAL RAMADHAN\nProgram 12 Hari\n04 Februari 2027\nTiba di Jakarta 15 Februari 2027\nDibimbing: Ustadz Mufy Hanif Thalib, Lc., M.A\nStart from Rp 47,8 Juta\n2 SPESIAL TENGAH RAMADHAN\nProgram 09 Hari\n17 Februari 2027\nTiba di Jakarta 25 Februari 2027\nDibimbing: Ustadz Mufy Hanif Thalib, Lc., M.A\nStart from Rp 45 Juta\n3 SPESIAL I'TIKAF MADINAH\nProgram 16 Hari\n26 Februari 2027\nTiba di Jakarta 13 Maret 2027\nDibimbing: Farhan Abu Furaihan\nStart from Rp 60,80 Juta\nINCLUDE UTAMA\nKajian Tematik\nKereta Cepat Haramain\nFree Museum Wahyu Makkah\nMakan di Al Romansiah\n0811 8801 0970\nKUOTA TERBATAS Amankan seat Anda sekarang.",
+    "_used_vision": true,
+    "_useful_images": [
+        "5.jpg"
+    ],
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "departure_city"
+    ],
+    "_needs_review": true
+}

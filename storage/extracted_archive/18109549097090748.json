@@ -1,0 +1,33 @@
+{
+    "ppiu_name": "Nakhla Tour",
+    "license_number": null,
+    "departure_date": "2026",
+    "date_certainty": "season",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": null,
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 0.5,
+        "price": 0,
+        "hotels": 0,
+        "ppiu": 0.8
+    },
+    "_media_id": "18109549097090748",
+    "_permalink": "https:\/\/www.instagram.com\/reel\/DbKZUtNPYjl\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-24T04:40:56+0000",
+    "_used_vision": false,
+    "_missing": [
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

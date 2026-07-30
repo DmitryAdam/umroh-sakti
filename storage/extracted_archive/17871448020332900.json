@@ -1,0 +1,44 @@
+{
+    "ppiu_name": "Bin Fahad Travel",
+    "license_number": null,
+    "departure_date": "2025-11-22",
+    "date_certainty": "exact",
+    "duration_days": 9,
+    "departure_city": "Jakarta",
+    "airline": "Saudia Airline",
+    "guide_name": "Ustadz Abdurrahman Thoyyib, Lc",
+    "extension": "none",
+    "price_tiers": [
+        {
+            "occupancy": "quad",
+            "amount": 34500000,
+            "currency": "IDR",
+            "is_starting_from": false
+        }
+    ],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [
+        "perlengkapan",
+        "tiket",
+        "visa",
+        "makan_3x",
+        "city_tour",
+        "handling",
+        "asuransi"
+    ],
+    "facilities_raw": "Perlengkapan Umroh, Tiket Pesawat PP, Visa Umroh, Bus Full AC, Snack makan 3x, City Tour, Manasik, Handling Bandara, Asuransi, Air Zam Zam 5 Liter",
+    "confidence": {
+        "departure_date": 1,
+        "price": 0.9,
+        "hotels": 0,
+        "ppiu": 1
+    },
+    "_media_id": "17871448020332900",
+    "_permalink": "https:\/\/www.instagram.com\/reel\/DNo-uj7T1ub\/",
+    "_source": "binfahad_travel",
+    "_posted_at": "2025-08-22T02:29:31+0000",
+    "_used_vision": false,
+    "_missing": [],
+    "_needs_review": false
+}

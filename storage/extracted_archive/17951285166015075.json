@@ -1,0 +1,42 @@
+{
+    "ppiu_name": "PT. Anugerah Dwi Dutawisata",
+    "license_number": "262 Tahun 2020",
+    "departure_date": null,
+    "date_certainty": "unknown",
+    "duration_days": null,
+    "departure_city": null,
+    "airline": "Garuda Indonesia \/ Saudia",
+    "guide_name": null,
+    "extension": "none",
+    "price_tiers": [],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [
+        "tiket",
+        "hotel",
+        "makan_3x",
+        "muthawif",
+        "handling",
+        "city_tour",
+        "asuransi"
+    ],
+    "facilities_raw": "Seat Confirmed, Tiket pesawat Direct PP, Hotel Mekkah dan Madinah, Transportasi Bus AC, Free Kereta cepat Haramain, Makan 3x sehari + Snack, Full Kajian Selama perjalanan, Makan nasi arab di Al Romansiah, Asatidzah Ahlusunnah Wal Jamaah",
+    "confidence": {
+        "departure_date": 1,
+        "price": 1,
+        "hotels": 1,
+        "ppiu": 1
+    },
+    "_media_id": "17951285166015075",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DbFpRHgj0cs\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-22T08:19:08+0000",
+    "_used_vision": true,
+    "_missing": [
+        "departure_date",
+        "duration_days",
+        "departure_city",
+        "price_tiers"
+    ],
+    "_needs_review": true
+}

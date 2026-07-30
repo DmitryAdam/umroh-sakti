@@ -1,0 +1,36 @@
+{
+    "ppiu_name": "PT. Anugerah Dwi Dutawisata",
+    "license_number": "262 tahun 2020",
+    "departure_date": "2026-11-07",
+    "date_certainty": "exact",
+    "duration_days": 7,
+    "departure_city": "Jakarta",
+    "airline": null,
+    "guide_name": "Ustadz Dr. Fachri Basyarahiel, Lc. M.A.",
+    "extension": "aqsa",
+    "price_tiers": [
+        {
+            "occupancy": "double",
+            "amount": 45800000,
+            "currency": "IDR",
+            "is_starting_from": false
+        }
+    ],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [],
+    "facilities_raw": null,
+    "confidence": {
+        "departure_date": 0.95,
+        "price": 0.95,
+        "hotels": 0,
+        "ppiu": 0.95
+    },
+    "_media_id": "18132079975616089",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DbDrYJnj3bM\/",
+    "_source": "nakhlatour",
+    "_posted_at": "2026-07-21T13:59:06+0000",
+    "_used_vision": true,
+    "_missing": [],
+    "_needs_review": false
+}
