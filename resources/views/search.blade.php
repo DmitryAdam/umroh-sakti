@@ -2,16 +2,11 @@
 @section('title', 'Cari Paket Umroh')
 
 @section('content')
-@if ($preview ?? false)
-    <div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-        <strong>Pratinjau lokal.</strong>
-        <span>Termasuk draft/review yang belum lolos pemeriksaan manusia.</span>
-        <span class="text-amber-700">Tombol &times; = bukan flyer umroh, langsung dibuang ke storage/trash.</span>
-        <a href="{{ route('search', ['semua' => 0]) }}" class="underline">published saja</a>
-    </div>
-@else
+{{-- Di lokal semua status tampil apa adanya, tanpa spanduk: yang sudah dibuang
+     lewat × memang hilang dari tabel. Toggle `?semua=0` tetap ada kalau perlu. --}}
+@unless ($preview ?? false)
     <p class="mb-3 text-xs text-stone-500">Cuma paket published yang tampil.</p>
-@endif
+@endunless
 
 @if ($preview ?? false)
     {{-- Panel pipeline: tombolnya cuma melempar job, `php artisan queue:work` yang kerja. --}}

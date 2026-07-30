@@ -32,7 +32,11 @@ class AccountController extends Controller
         ));
 
         return view('accounts', [
-            'accounts' => SourceAccount::orderByRaw('last_fetched_at is null desc, last_fetched_at desc')->get(),
+            // Yang gagal paling atas, lalu yang belum pernah di-scrap: dua-duanya
+            // butuh tindakan, sisanya cuma riwayat.
+            'accounts' => SourceAccount::orderByRaw(
+                'last_error is not null desc, last_fetched_at is null desc, last_fetched_at desc',
+            )->get(),
             'posts' => $posts,
             'packages' => Package::selectRaw('source_account, count(*) as total')
                 ->groupBy('source_account')->pluck('total', 'source_account'),

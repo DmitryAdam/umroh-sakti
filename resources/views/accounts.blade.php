@@ -31,6 +31,9 @@
     <span>
         {{ $accounts->count() }} akun ·
         {{ $accounts->whereNull('last_fetched_at')->count() }} belum pernah di-scrap
+        @if ($gagal = $accounts->whereNotNull('last_error')->count())
+            · <span class="text-red-700">{{ $gagal }} gagal di percobaan terakhir</span>
+        @endif
     </span>
     @if ($accounts->where('status', 'approved')->isNotEmpty())
         <form method="POST" action="{{ route('accounts.fetch_all') }}" class="ml-auto"
@@ -67,6 +70,13 @@
                         <span title="{{ $account->last_fetched_at }}">{{ $account->last_fetched_at->diffForHumans() }}</span>
                     @else
                         <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">belum pernah</span>
+                    @endif
+                    {{-- Percobaan terakhir gagal. Timestamp di atas tetap yang terakhir
+                         BERHASIL, jadi dua-duanya perlu kelihatan sekaligus. --}}
+                    @if ($account->last_error)
+                        <div class="mt-1 text-red-700" title="{{ $account->last_error }}">
+                            gagal: {{ Str::limit($account->last_error, 70) }}
+                        </div>
                     @endif
                 </td>
                 <td class="px-3 py-2 text-right text-stone-600">{{ $posts[$account->username] ?? 0 }}</td>

@@ -120,7 +120,44 @@ limit tingkat app.
 
 Batasan: akun target wajib Professional (personal tidak terbaca sama sekali),
 tidak ada akses Story, media ID tidak bisa di-GET terpisah, rate limit berbasis
-app sehingga semua request menumpuk di satu token.
+app.
+
+**Rate limit per app, jadi banyak app = banyak kuota.** `IG_ACCESS_TOKEN` (dan
+kalau perlu `IG_USER_ID`) boleh berisi daftar JSON berkutip, sepasang per Meta App
+— `envList()` yang membacanya, sama seperti `EXTRACT_MODEL`/`VISION_MODEL`.
+Satu Page yang di-link ke beberapa app cukup satu `IG_USER_ID`; `igPair()`
+memakainya ulang untuk semua token, dan menolak jumlah yang tidak sepadan (salah
+pasang cuma kelihatan sebagai `#190`, bukan sebagai salah konfigurasi). `fetch`
+memilih app dari `crc32(username)` — satu proses = satu akun, jadi giliran tidak
+bisa dititip ke variabel static seperti `llmPostAny()` — lalu pindah app kalau
+kena `#4`, mengulang halaman yang sama. Semua app habis = galat dilempar, dan
+`FetchAccount` yang menunggu 5 menit.
+
+**Yang mengikat itu `total_time`, bukan jumlah request.** `graphGet()` mencatat
+header `x-app-usage` ke jejak pipeline; isinya tiga persen. Terukur 2026-07-30:
+app kena `#4` saat `call_count` baru 25% tapi `total_time` sudah 136%. Jendelanya
+bergulir 1 jam. Konsekuensinya jeda **tidak** menurunkan konsumsi — cuma
+meratakan; yang menurunkan cuma request yang lebih murah (field lebih sedikit,
+ekspansi `children{}` lebih ringan). Kuotanya benar-benar terpisah per app
+walau Page-nya sama — terbukti tiga nilai berbeda di request berturut-turut,
+jadi nambah app memang nambah kuota. `x-business-use-case-usage` tidak pernah
+dikirim di jalur ini.
+
+Setiap request ke `graph.facebook.com` didahului jeda `IG_FETCH_SLEEP` detik
+(default 3, boleh pecahan, override `--sleep=`). Jedanya di loop `cmdFetch()` —
+satu-satunya tempat yang memanggil Graph di jalur fetch — jadi berlaku untuk
+tombol `/`, `packages:crawl`, `FetchAccount`, maupun `fetchall`. Karena antrian
+`ig` cuma satu worker dan satu proses = satu akun, jeda itu sekaligus jarak
+antar-halaman **dan** antar-akun. Download flyer tidak dijeda: itu ke CDN
+`scontent`, bukan Graph, kuotanya beda.
+
+`META_APP_ID`/`META_APP_SECRET` **cuma dipakai `probe.php auth`** untuk menukar
+token, satu app per jalan — bukan oleh `fetch`. Keduanya juga boleh daftar JSON
+berkutip, urutannya sama dengan `IG_ACCESS_TOKEN`, dan `auth <short_token> --app=N`
+memilih slotnya (default 0); `metaApp()` menolak jumlah id vs secret yang tidak
+sepadan. Nambah app: tambahkan id + secret-nya ke dua daftar itu, jalankan `auth
+--app=<slot baru>`, terus token hasilnya ditaruh di slot yang sama di
+`IG_ACCESS_TOKEN`.
 
 ## Media
 
@@ -186,7 +223,7 @@ crawl".
 ```bash
 php artisan serve                  # http://localhost:8000
 php artisan queue:work             # SEMUA antrian sekaligus, paralel (Ctrl+C berhenti)
-php artisan test                   # 32 test: import+dedup+ambang, filter publik, regulasi, halaman akun
+php artisan test                   # 37 test: import+dedup+ambang, filter publik, regulasi, halaman akun
 php artisan packages:import        # storage/extracted/*.json -> database
 php artisan migrate:fresh --seed
 ```
@@ -222,9 +259,29 @@ Daftar akun sumber di `/akun` (link dari panel pipeline): masukin username/URL/@
 satu per baris (parsernya `SourceAccount::usernameOf()`, dipakai juga oleh
 `packages:crawl`), lihat status + `last_fetched_at` + jumlah post/paket/banned per akun,
 plus tombol `scrap` per akun dan `Scrap semua` (lewat `packages:crawl --limit=9`, sama
-seperti tombol pipeline di `/`, cuma tanpa seed `accounts.txt`). Akun yang belum pernah
-di-scrap naik ke atas. Akun yang ditambah dari sini langsung `approved` — operator lokal
-memang si pemberi approval.
+seperti tombol pipeline di `/`, cuma tanpa seed `accounts.txt`). Akun yang ditambah dari
+sini langsung `approved` — operator lokal memang si pemberi approval.
+
+Urutannya: yang **gagal** paling atas, lalu yang belum pernah di-scrap, sisanya menurut
+`last_fetched_at`. Alasan gagal ada di kolom `source_accounts.last_error` — diisi saat
+fetch gagal, dikosongkan saat berhasil, jadi isinya status percobaan terakhir dan bukan
+riwayat. `last_fetched_at` tetap penanda terakhir **berhasil**, jadi satu baris bisa
+menampilkan dua-duanya sekaligus.
+
+Yang perlu diingat soal `$this->fail()`: dia menandai job gagal tapi **tidak
+menghentikan `handle()`**. Tanpa `return` sesudahnya, akun yang gagal ikut distempel
+`last_fetched_at` dan kelihatan baru saja berhasil di-scrap — itu bug yang pernah
+kejadian, dijaga oleh test `fetch_gagal_tidak_dianggap_berhasil`.
+
+`last_error` diisi di **satu tempat saja: hook `FetchAccount::failed()`**, bukan di
+cabang if `handle()`. Alasannya kegagalan yang paling sering justru tidak lewat cabang
+itu — `database is locked` dari SQLite, timeout Process, exception liar — dan 19
+kegagalan pertama semuanya jenis itu, tanpa jejak apa pun di halaman akun.
+
+Retry-nya beda per penyebab: **semua** app kena rate limit → `release(300)`, diulang
+tiap 5 menit sampai `retryUntil` 2 jam habis. Username salah / token mati / response
+ditolak → `fail()` sekali, masuk `failed_jobs`, **tidak** diulang sendiri; jalankan
+`php artisan queue:retry all` atau tekan `scrap` lagi.
 
 Review, pratinjau, dan tombol pipeline semuanya di `/` — `abort_unless(isLocal())`,
 jadi tidak pernah kebuka di produksi. Tidak ada login dan tidak ada tabel `users`.

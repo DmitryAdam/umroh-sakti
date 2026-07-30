@@ -252,14 +252,30 @@ TXT;
 
 function graphGet(string $url): array
 {
+    // Kuota kepakai dilaporkan Meta di header, bukan di body. Dicatat supaya
+    // ambang `#4` itu angka terukur, bukan tebakan dari dokumentasi — dan supaya
+    // kelihatan apakah tiga app benar-benar tiga kuota terpisah atau numpuk di
+    // satu Page yang sama.
+    $usage = [];
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$usage) {
+            [$name, $val] = array_pad(explode(':', $line, 2), 2, '');
+            if (in_array(strtolower(trim($name)), ['x-app-usage', 'x-business-use-case-usage'], true)) {
+                $usage[strtolower(trim($name))] = trim($val);
+            }
+            return strlen($line);
+        },
     ]);
     $body = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+
+    foreach ($usage as $name => $val) {
+        out("    $name: $val");
+    }
 
     if ($body === false) {
         throw new RuntimeException('curl gagal');
@@ -284,6 +300,49 @@ function graphGet(string $url): array
     return $json;
 }
 
+/**
+ * Kredensial Graph API, sepasang per Meta App. `IG_ACCESS_TOKEN` dan `IG_USER_ID`
+ * boleh berisi daftar JSON berkutip — `'["EAA…app1","EAA…app2"]'`. Rate limit `#4`
+ * itu tingkat app, jadi dua app = dua kuota terpisah.
+ *
+ * @return list<array{user: string, token: string}>
+ */
+function igCreds(): array
+{
+    return igPair(envList(need('IG_USER_ID'), ''), envList(need('IG_ACCESS_TOKEN'), ''));
+}
+
+/**
+ * Satu IG_USER_ID + banyak token = satu Page yang di-link ke beberapa app; itu
+ * kasus paling umum, jadi user id-nya dipakai ulang. Selain itu jumlahnya wajib
+ * sama banyak — salah pasang berarti token app A dikirim dengan id akun app B,
+ * dan Graph membalasnya `#190`, bukan sesuatu yang kelihatan salah konfigurasi.
+ *
+ * @param  string[] $users
+ * @param  string[] $tokens
+ * @return list<array{user: string, token: string}>
+ */
+function igPair(array $users, array $tokens): array
+{
+    if (count($users) !== 1 && count($users) !== count($tokens)) {
+        throw new RuntimeException(sprintf(
+            'IG_USER_ID %d entri vs IG_ACCESS_TOKEN %d entri. Isi satu IG_USER_ID '
+            . '(Page yang sama di beberapa app) atau sepasang per app, urutannya sama.',
+            count($users),
+            count($tokens),
+        ));
+    }
+
+    return array_map(
+        fn (int $i, string $token) => [
+            'user'  => $users[count($users) === 1 ? 0 : $i],
+            'token' => $token,
+        ],
+        array_keys($tokens),
+        $tokens,
+    );
+}
+
 function cmdFetch(array $argv): void
 {
     $username = $argv[2] ?? null;
@@ -293,8 +352,12 @@ function cmdFetch(array $argv): void
     }
     $limit = (int) (optval($argv, 'limit') ?? 50);
 
-    $igUser  = need('IG_USER_ID');
-    $token   = need('IG_ACCESS_TOKEN');
+    // Satu proses = satu akun (FetchAccount), jadi giliran tidak bisa dititip ke
+    // variabel static seperti llmPostAny. Awalnya diambil dari nama akunnya:
+    // tanpa state apa pun, akun yang berbeda mulai di app yang berbeda.
+    $creds   = igCreds();
+    $c       = crc32($username) % count($creds);
+    $sisa    = count($creds) - 1;
     $version = env('IG_GRAPH_VERSION', 'v25.0');
 
     // thumbnail_url dipakai untuk VIDEO/Reels — flyer sering diposting sebagai Reels,
@@ -314,26 +377,58 @@ function cmdFetch(array $argv): void
     // paginasi jalan sampai habis. Naikkan kalau backlognya memang panjang.
     $scanLimit = max(50, $limit * 3);
 
+    // ponytail: page 25 ditolak HTTP 500 "reduce the amount of data" di akun yang
+    // carousel-nya panjang — ekspansi children bikin response membengkak. Dibelah
+    // dua sampai lolos; naikkan lagi kalau Graph melonggarkan batasnya.
+    $page = 25;
+
+    // Jeda sebelum SETIAP request ke Graph, termasuk yang pertama. Antrian `ig`
+    // cuma satu worker, jadi satu proses = satu akun: jeda di sini sekaligus
+    // memberi jarak antar-halaman dan antar-akun. Download gambar tidak ikut
+    // dijeda — itu ke CDN scontent, bukan graph.facebook.com, kuotanya beda.
+    $sleep = (float) (optval($argv, 'sleep') ?? env('IG_FETCH_SLEEP', '3'));
+
     while ($count < $limit && $scanned < $scanLimit) {
-        $mediaArgs = $after === null ? 'media.limit(25)' : "media.after($after).limit(25)";
+        if ($sleep > 0) {
+            usleep((int) ($sleep * 1_000_000));
+        }
+        $mediaArgs = $after === null ? "media.limit($page)" : "media.after($after).limit($page)";
         $url = sprintf(
             'https://graph.facebook.com/%s/%s?fields=business_discovery.username(%s){%s{%s}}&access_token=%s',
             $version,
-            $igUser,
+            $creds[$c]['user'],
             $username,
             $mediaArgs,
             $fields,
-            urlencode($token)
+            urlencode($creds[$c]['token'])
         );
 
         out(sprintf(
-            '  GET graph.facebook.com/%s business_discovery(@%s) %s',
+            '  GET graph.facebook.com/%s business_discovery(@%s) %s%s',
             $version,
             $username,
-            $after === null ? 'media.limit(25)' : "media.after(" . substr($after, 0, 12) . "…).limit(25)",
+            $after === null ? "media.limit($page)" : "media.after(" . substr($after, 0, 12) . "…).limit($page)",
+            count($creds) > 1 ? ' [app ' . ($c + 1) . '/' . count($creds) . ']' : '',
         ));
 
-        $res = graphGet($url);
+        try {
+            $res = graphGet($url);
+        } catch (RuntimeException $e) {
+            if ($page > 1 && str_contains($e->getMessage(), 'reduce the amount of data')) {
+                $page = intdiv($page, 2);
+                out("  response kegedean, ulangi dengan media.limit($page)");
+                continue;
+            }
+            // Limitnya per app, bukan per akun: pindah app, ulangi halaman yang sama.
+            // Kalau semua app habis, galatnya dilempar — FetchAccount yang menunggu.
+            if ($sisa > 0 && str_contains($e->getMessage(), 'rate limit')) {
+                $c = ($c + 1) % count($creds);
+                $sisa--;
+                out('  kena rate limit, pindah ke app ' . ($c + 1) . '/' . count($creds));
+                continue;
+            }
+            throw $e;
+        }
         $bd  = $res['business_discovery'] ?? null;
         if ($bd === null) {
             // Akun personal / bukan Professional -> ga terbaca sama sekali.
@@ -568,11 +663,42 @@ function savePost(string $username, array $post): void
  * Token yang benar diawali "EAA". Kalau punya lo diawali "IGAA", itu Business Login
  * for Instagram — salah produk, business_discovery ga akan ada.
  */
+/**
+ * Kredensial app buat menukar token. META_APP_ID/META_APP_SECRET boleh berisi
+ * daftar JSON berkutip seperti IG_ACCESS_TOKEN, urutannya sama — jadi `--app=N`
+ * menukar token untuk slot ke-N di IG_ACCESS_TOKEN. Jumlahnya wajib sepadan:
+ * id app A dipasang dengan secret app B cuma kelihatan sebagai galat OAuth.
+ *
+ * @param  string[] $ids
+ * @param  string[] $secrets
+ * @return array{0: string, 1: string}
+ */
+function metaApp(array $ids, array $secrets, int $slot): array
+{
+    if (count($ids) !== count($secrets)) {
+        throw new RuntimeException(sprintf(
+            'META_APP_ID %d entri vs META_APP_SECRET %d entri. Isi sepasang per app, urutannya sama.',
+            count($ids),
+            count($secrets),
+        ));
+    }
+    if (!isset($ids[$slot])) {
+        throw new RuntimeException(sprintf(
+            '--app=%d di luar daftar: META_APP_ID cuma punya %d entri (slot 0..%d).',
+            $slot,
+            count($ids),
+            count($ids) - 1,
+        ));
+    }
+
+    return [$ids[$slot], $secrets[$slot]];
+}
+
 function cmdAuth(array $argv): void
 {
     $short = $argv[2] ?? null;
     if ($short === null) {
-        out('Usage: php probe.php auth <short_lived_user_token>');
+        out('Usage: php probe.php auth <short_lived_user_token> [--app=0]');
         exit(1);
     }
     if (str_starts_with($short, 'IGAA')) {
@@ -582,8 +708,14 @@ function cmdAuth(array $argv): void
         );
     }
 
-    $appId   = need('META_APP_ID');
-    $secret  = need('META_APP_SECRET');
+    $slot = (int) (optval($argv, 'app') ?? 0);
+    [$appId, $secret] = metaApp(
+        envList(need('META_APP_ID'), ''),
+        envList(need('META_APP_SECRET'), ''),
+        $slot,
+    );
+    out("App slot $slot: $appId");
+
     $version = env('IG_GRAPH_VERSION', 'v25.0');
     $base    = "https://graph.facebook.com/$version";
 
@@ -617,7 +749,7 @@ function cmdAuth(array $argv): void
         out('Tempel ke .env:');
         out('  IG_USER_ID=' . $ig['id']);
         // Page token turunan long-lived user token tidak expire selama izin tidak dicabut.
-        out('  IG_ACCESS_TOKEN=' . $page['access_token']);
+        out("  IG_ACCESS_TOKEN slot $slot = " . $page['access_token']);
     }
     out(str_repeat('-', 46));
 
@@ -674,7 +806,7 @@ function cmdExtract(array $argv): void
     // --only=<media_id>: ekstrak ulang satu post saja, buat ngetes perubahan prompt.
     $only   = optval($argv, 'only');
     $force  = $force || $only !== null;
-    $models = models(env('EXTRACT_MODEL'), 'ds/deepseek-v4-flash');
+    $models = envList(env('EXTRACT_MODEL'), 'ds/deepseek-v4-flash');
 
     @mkdir(EXT_DIR, 0775, true);
 
@@ -974,7 +1106,7 @@ function readFlyer(array $images, string $caption = ''): array
     }
     $content[] = ['type' => 'text', 'text' => TRANSCRIBE_PROMPT];
 
-    $models = models(env('VISION_MODEL'), 'gemini/gemini-3.1-flash-lite-preview');
+    $models = envList(env('VISION_MODEL'), 'gemini/gemini-3.1-flash-lite-preview');
     out(sprintf(
         '  POST %s model=%s (%d gambar, %.1f KB base64) -> transkrip',
         parse_url(routerUrl(), PHP_URL_HOST),
@@ -1052,13 +1184,14 @@ function routerUrl(): string
 }
 
 /**
- * Isi EXTRACT_MODEL/VISION_MODEL: satu nama, atau daftar berbentuk JSON —
- * `'["ds/deepseek-v4-flash","openrouter/deepseek/deepseek-v4-flash"]'`. Dipakai
- * bergiliran oleh llmPostAny(); yang galat dilewat.
+ * Isi env yang boleh berisi daftar: satu nilai polos, atau daftar berbentuk JSON —
+ * `'["ds/deepseek-v4-flash","openrouter/deepseek/deepseek-v4-flash"]'`.
+ * EXTRACT_MODEL/VISION_MODEL dipakai bergiliran oleh llmPostAny() (yang galat
+ * dilewat); IG_ACCESS_TOKEN/IG_USER_ID oleh igCreds().
  *
- * @return string[] minimal satu nama
+ * @return string[] minimal satu nilai
  */
-function models(?string $raw, string $default): array
+function envList(?string $raw, string $default): array
 {
     // Kutip luar dilepas: JSON di .env wajib dikutip supaya parser Laravel tidak
     // tersandung spasi di dalam daftarnya.
@@ -1343,10 +1476,32 @@ function cmdSelftest(): void
     assert(str_contains($campur['flyer_text'], '--- gambar 3 ---'), 'transkrip audit tetap memuat semua gambar');
 
     // Daftar model: satu nama, JSON array, atau isi ngawur -> tetap ada yang dipakai.
-    assert(models('ds/satu', 'x') === ['ds/satu'], 'satu nama polos');
-    assert(models(null, 'x') === ['x'], 'kosong jatuh ke default');
-    assert(models('\'["a/1", "b/2" , ""]\'', 'x') === ['a/1', 'b/2'], 'JSON berkutip, entri kosong dibuang');
-    assert(models('[rusak', 'x') === ['x'], 'JSON rusak jatuh ke default');
+    assert(envList('ds/satu', 'x') === ['ds/satu'], 'satu nama polos');
+    assert(envList(null, 'x') === ['x'], 'kosong jatuh ke default');
+    assert(envList('\'["a/1", "b/2" , ""]\'', 'x') === ['a/1', 'b/2'], 'JSON berkutip, entri kosong dibuang');
+    assert(envList('[rusak', 'x') === ['x'], 'JSON rusak jatuh ke default');
+
+    // --- kredensial Graph API: satu Page di beberapa app, atau sepasang per app
+    assert(igPair(['u1'], ['t1', 't2']) === [
+        ['user' => 'u1', 'token' => 't1'],
+        ['user' => 'u1', 'token' => 't2'],
+    ], 'satu IG_USER_ID dipakai semua token');
+    assert(igPair(['u1', 'u2'], ['t1', 't2'])[1]['user'] === 'u2', 'pasangan per app ikut urutan');
+    try {
+        igPair(['u1', 'u2'], ['t1', 't2', 't3']);
+        assert(false, 'jumlah user vs token tidak sepadan harus galat, bukan diam-diam salah pasang');
+    } catch (RuntimeException) {
+    }
+
+    // Slot app untuk `auth`: id + secret sepasang, slot di luar daftar galat.
+    assert(metaApp(['a1', 'a2'], ['s1', 's2'], 1) === ['a2', 's2'], 'slot memilih pasangan yang sama');
+    foreach ([[['a1'], ['s1', 's2'], 0], [['a1', 'a2'], ['s1', 's2'], 2]] as [$ids, $secrets, $slot]) {
+        try {
+            metaApp($ids, $secrets, $slot);
+            assert(false, 'id/secret tidak sepadan atau slot di luar daftar harus galat');
+        } catch (RuntimeException) {
+        }
+    }
 
     // Tiga bentuk balasan router yang harus sama-sama kebaca.
     assert(llmContent('{"choices":[{"message":{"content":"a"}}]}') === 'a', 'objek biasa');

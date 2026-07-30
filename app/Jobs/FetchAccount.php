@@ -8,7 +8,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * Fetch satu akun lewat probe.php (satu-satunya yang menyentuh Graph API).
@@ -73,18 +75,48 @@ class FetchAccount implements ShouldQueue
             $error = trim($result->errorOutput() ?: $result->output());
 
             // Rate limit bukan kesalahan akun ini — tunggu, jangan tandai gagal.
+            // Semua app sudah dicoba sebelum probe.php melempar ini (lihat igCreds).
             if (str_contains($error, 'rate limit')) {
                 PipelineLog::write('ig', "@{$this->account->username}: rate limit, coba lagi 5 menit");
+                $this->account->update(['last_error' => 'semua app kena rate limit — antri lagi tiap 5 menit']);
                 $this->release(300);
 
                 return;
             }
 
-            throw new RuntimeException("fetch @{$this->account->username}: $error");
+            // Bukan rate limit = username salah, token mati, atau response ditolak.
+            // Diulang pun hasilnya sama, dan retryUntil 2 jam berarti stacktrace
+            // penuh tiap 12 detik. Matikan sekali, biar kelihatan di failed_jobs.
+            // last_error diisi oleh failed(), yang ikut kepanggil oleh fail().
+            $this->fail(new RuntimeException("fetch @{$this->account->username}: $error"));
+
+            // fail() menandai job gagal tapi TIDAK menghentikan handle(). Tanpa
+            // return, baris di bawah tetap jalan: akun yang gagal ikut distempel
+            // last_fetched_at dan di /akun kelihatan baru saja berhasil di-scrap.
+            return;
         }
 
-        $this->account->update(['last_fetched_at' => now()]);
+        $this->account->update(['last_fetched_at' => now(), 'last_error' => null]);
 
         ExtractPending::dispatch();
+    }
+
+    /**
+     * Satu-satunya tempat `last_error` diisi saat gagal.
+     *
+     * Dipanggil framework untuk SEMUA kegagalan, bukan cuma `fail()` di handle():
+     * `database is locked` dari SQLite, timeout Process, dan exception liar lainnya
+     * tidak pernah lewat cabang if di atas — 19 kegagalan pertama semuanya jenis itu
+     * dan tidak meninggalkan jejak apa pun di halaman akun.
+     *
+     * ponytail: kalau penyebabnya justru DB terkunci, update ini bisa ikut gagal dan
+     * errornya hilang. busy_timeout 10s di config/database.php sudah menutup mayoritas;
+     * kalau masih bocor, tulis ke storage/pipeline.jsonl saja, bukan ke DB.
+     */
+    public function failed(?Throwable $e): void
+    {
+        $this->account->update([
+            'last_error' => Str::limit(trim((string) $e?->getMessage()) ?: 'gagal tanpa pesan', 300),
+        ]);
     }
 }

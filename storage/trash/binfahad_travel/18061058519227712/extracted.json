@@ -1,0 +1,63 @@
+{
+    "post_kind": "package_offer",
+    "ppiu_name": "PT. Bin Fahad Mubarak",
+    "license_number": "02202012124770002 Tahun 2024",
+    "departure_date": "2025-09-12",
+    "date_certainty": "exact",
+    "duration_days": 13,
+    "departure_city": "Jakarta",
+    "airline": "Saudia",
+    "guide_name": "Ustadz Fathi bin Yazid Jawas Hafidzahullahu Ta'ala",
+    "extension": "turki",
+    "price_tiers": [
+        {
+            "occupancy": "quad",
+            "amount": 39000000,
+            "currency": "IDR",
+            "is_starting_from": false
+        },
+        {
+            "occupancy": "triple",
+            "amount": 40500000,
+            "currency": "IDR",
+            "is_starting_from": false
+        },
+        {
+            "occupancy": "double",
+            "amount": 42000000,
+            "currency": "IDR",
+            "is_starting_from": false
+        }
+    ],
+    "hotel_makkah": null,
+    "hotel_madinah": null,
+    "facilities": [
+        "visa",
+        "tiket",
+        "city_tour",
+        "handling",
+        "makan_3x",
+        "perlengkapan"
+    ],
+    "facilities_raw": "Perlengkapan Umroh - Tiket Pesawat Internasional - City Tour - Visa Umroh- Handling Bandara - Snack & Makan 3 Kali Sehari - Manasik Umroh - Air Zam-zam 5 Liter - Bus Full AC; FREE KERETA CEPAT",
+    "detail_images": [
+        1
+    ],
+    "confidence": {
+        "departure_date": 1,
+        "price": 1,
+        "hotels": 0,
+        "ppiu": 1
+    },
+    "_media_id": "18061058519227712",
+    "_permalink": "https:\/\/www.instagram.com\/p\/DL_3ayJTFP4\/",
+    "_source": "binfahad_travel",
+    "_posted_at": "2025-07-12T06:36:26+0000",
+    "_flyer_text": "BIN FAHAD TRAVEL\nUMROH + Turkiye\nInsya Allah Bersama Ustadz\nFathi bin Yazid Jawas\nHafidzahullahu ta'ala\n13 HARI\nInsya Allah Keberangkatan\n12 SEPT 25\nSTART FROM\nJAKARTA\nQuad\nRp 39 jt\nTriple\nRp 40,5 jt\nDouble\nRp 42 jt\nFREE KERETA CEPAT\nFlight By: Saudia\nPerlengkapan Umroh - Tiket Pesawat Internasional - City Tour - Visa\nUmroh- Handling Bandara - Snack & Makan 3 Kali Sehari - Manasik\nUmroh - Air Zam-zam 5 Liter - Bus Full AC\nDaftar Sekarang\n0812-1688-8661\nPT. BIN FAHAD MUBARAK\nIzin Umroh No. 02202012124770002 Tahun 2024",
+    "_used_vision": true,
+    "_useful_images": [
+        "0.jpg"
+    ],
+    "_missing": [],
+    "_needs_review": false
+}
