@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Illuminate\Support\Facades\Process;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
 use Tests\TestCase;
 
 class QueueWorkTest extends TestCase
@@ -73,5 +74,37 @@ class QueueWorkTest extends TestCase
 
         $this->assertSame(2, $nyala, 'anak yang keluar harus dinyalakan lagi, bukan dibiarkan mati');
         $this->assertNotSame($awal, $proses->id(), 'yang jalan sekarang proses baru');
+
+        // Kode keluarnya ikut dicatat sebelum spawn ulang. InvokedProcess tidak punya
+        // exitCode() — ambilnya lewat wait(), dan itu tidak memblokir untuk proses
+        // yang sudah keluar. Salah method di sini = induknya mati saat worker
+        // pertama restart, bukan saat start.
+        $mati = Process::timeout(0)->start([PHP_BINARY, '-r', 'exit(12);']);
+        while ($mati->running()) {
+            usleep(20_000);
+        }
+        $this->assertSame(12, $mati->wait()->exitCode());
+    }
+
+    /**
+     * Ctrl+C dilempar sebagai ProcessSignaledException, bukan exit code.
+     *
+     * `FetchAccount`/`ExtractPost` menangkapnya lalu `release()` — sinyalnya kena satu
+     * grup proses, jadi probe.php ikut mati padahal jobnya tidak salah apa-apa. Kalau
+     * kelasnya berubah, catch-nya meleset diam-diam dan tiap kali worker dihentikan
+     * manual job mendarat di failed_jobs (kejadian: 3 job "gagal" yang isinya
+     * signal "2"). `$result->failed()` tidak kepakai di sini — run() tidak pernah
+     * balik, dia melempar.
+     */
+    public function test_proses_yang_disinyal_melempar_process_signaled_exception(): void
+    {
+        $proses = Process::timeout(10)->start([PHP_BINARY, '-r', 'sleep(10);']);
+
+        // Jeda kecil: sinyal ke proses yang belum sempat exec dilewat begitu saja.
+        usleep(200_000);
+        posix_kill($proses->id(), SIGINT);
+
+        $this->expectException(ProcessSignaledException::class);
+        $proses->wait();
     }
 }

@@ -1,2 +1,9 @@
 User-agent: *
-Disallow:
+# Listing paketnya memang untuk dicari — yang ditutup cuma halaman operator.
+# Ini bukan pengaman (yang mengamankan itu grup `auth` di routes/web.php), cuma
+# supaya /login & kawan-kawan tidak nyangkut di hasil pencarian.
+Disallow: /login
+Disallow: /akun
+Disallow: /pipeline
+Disallow: /avatar
+Allow: /

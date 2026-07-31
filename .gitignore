@@ -23,8 +23,13 @@ Homestead.json
 Homestead.yaml
 Thumbs.db
 
+# Flyer paket yang sudah lolos import (FLYER_DISK=local). 222 MB dan tumbuh tiap
+# import — di produksi ini pindah ke s3/R2, di lokal jangan pernah ikut ke git.
+/storage/flyers
+
 # probe.php artifacts
 /storage/raw
+/storage/profiles
 /storage/trash
 /storage/extracted
 /storage/hashes.json

@@ -86,6 +86,43 @@ class PipelineLog
         return $out;
     }
 
+    /**
+     * Jejak fetch terakhir untuk satu akun: potongan antrian `ig` dari baris
+     * `== fetch @user` sampai `== fetch` berikutnya. Baris detailnya ("dilewat:
+     * VIDEO tanpa gambar", "dilewat: sudah dikecualikan") tidak menyebut
+     * username — yang membatasinya cuma posisi, dan itu cukup karena antrian
+     * `ig` cuma satu worker: satu proses = satu akun, tidak ada yang menyelip.
+     *
+     * Kosong = fetch-nya sudah tergeser dari 800 baris terakhir, bukan tidak
+     * pernah jalan.
+     *
+     * @return array<int, array{t: string, q: string, m: string}>
+     */
+    public static function fetchBlock(string $username): array
+    {
+        $rows = array_values(array_filter(self::rows(), fn ($r) => $r['q'] === 'ig'));
+
+        $mulai = null;
+        foreach ($rows as $i => $row) {
+            if (str_starts_with($row['m'], "== fetch @$username ")) {
+                $mulai = $i;
+            }
+        }
+        if ($mulai === null) {
+            return [];
+        }
+
+        $blok = [];
+        foreach (array_slice($rows, $mulai) as $row) {
+            if ($blok !== [] && str_starts_with($row['m'], '== fetch @')) {
+                break;
+            }
+            $blok[] = $row;
+        }
+
+        return $blok;
+    }
+
     /** @return array<int, array{t: string, q: string, m: string}> */
     private static function rows(): array
     {

@@ -5,8 +5,9 @@ flyer + caption jadi data terstruktur, lalu menyajikannya untuk dicari dan diban
 
 ## Stack
 
-Laravel 12 + SQLite · Anthropic SDK (ekstraksi). Tanpa Filament, tanpa login —
-review & pratinjau jalan di halaman `/` (dikunci ke env local).
+Laravel 12 + SQLite · Anthropic SDK (ekstraksi). Tanpa Filament. Login operator
+bawaan Laravel (tabel `users`, tanpa starter kit) — review & pratinjau jalan di
+halaman `/` untuk yang sudah masuk.
 Redis/Horizon, R2, dan Meilisearch ada di rencana tapi **belum dipasang** — jangan
 asumsikan tersedia.
 
@@ -37,10 +38,26 @@ melar (1019 folder vs 798 baris). `Package::deleteSources()` dan
 `ImportExtractedPackages::prune()` sama-sama menghapus, dan corong pipeline
 menghitung `excluded_posts`, bukan folder.
 
-Konsekuensinya: audit visual "kenapa post ini ditolak" hilang. Yang tersisa
-`reason` di `excluded_posts` + `storage/feedback.jsonl`. Kalau flyernya perlu
+**Kecuali `bukan_paket`: filenya ditahan sampai manusia yang memvonis.** Itu satu-satunya
+reason yang murni tebakan mesin (gerbang vision + saringan struktural) dan yang paling
+sering salah — sekali rawnya dibuang, flyer yang cuma kelewat prompt hilang selamanya.
+`ImportExtractedPackages::buang()` tetap menulis barisnya `excluded_posts` (fetch &
+extract tidak mengulanginya, jadi tidak ada yang dibayar), cuma `prune()`-nya dilewat.
+Penghapusannya pindah ke tombol **blokir** di halaman post
+(`POST /posts/bulk` dengan `action=block`): reason jadi `manual`,
+raw + hasil ekstraksi + baris paketnya dibuang. Barisnya `excluded_posts` sengaja
+tetap tinggal — itu yang menahan fetch. Konsekuensinya `storage/raw` tumbuh sampai
+ada yang menyapunya; kalau menumpuk, blokir massal di tab **ditolak**.
+
+Konsekuensinya: audit visual "kenapa post ini ditolak" hilang untuk reason yang lain.
+Yang tersisa `reason` di `excluded_posts` + `storage/feedback.jsonl`. Kalau flyernya perlu
 dilihat lagi, fetch ulang — dan itu berarti hapus dulu barisnya di
-`excluded_posts`.
+`excluded_posts`. Itu yang dikerjakan tombol **paksa** di `/accounts`
+(`POST /accounts/{account}/fetch` dengan `force=1`, atau `action=force` di
+`POST /accounts/bulk` untuk baris yang dicentang): hapus baris `excluded_posts` akun
+itu, lalu fetch biasa — sisanya jalan sendiri. Tidak ada file yang perlu disentuh
+(post yang ditolak rawnya memang sudah dihapus), tapi `--limit` sekarang ikut
+menghitung post-post itu, jadi backlog panjang perlu beberapa kali tekan.
 
 **Jangan re-host gambar ke CDN dan jangan hotlink `scontent`.** Dua-duanya sudah
 dipertimbangkan sebagai jalan keluar dari beratnya `storage/raw`, dua-duanya
@@ -90,17 +107,70 @@ pihak ketiga. Hanya Instagram Graph API resmi.
 **Jangan simpan `media_url`.** Itu signed CDN URL yang expire dalam hitungan hari.
 Download saat ingest.
 
+**`storage/raw` itu tempat singgah, bukan gudang.** Semua gambar hasil download
+masuk raw dulu; begitu satu gambar divonis penawaran dan barisnya dibuat,
+`Package::promoteFlyer()` memindahkannya ke disk **`flyers`**
+(`{media_id}/{flyer_index}.jpg`) lalu **menghapus jpg rawnya** — kalau raw-nya
+ditinggal, "pindah ke s3" cuma penggandaan byte. `post.json` sengaja ditinggal:
+itu yang bikin fetch berikutnya melewati post ini. Slide lain dari carousel yang
+sama tetap di raw sampai prune.
+
+Disknya `env('FLYER_DISK')` (`config/filesystems.php`), default `local` =
+`storage/flyers`; produksi tinggal `FLYER_DISK=s3` dengan `AWS_*` yang sama.
+Bacanya lewat `FlyerThumbController`: thumbnail selalu di-cache lokal di
+`storage/app/thumbs` — kalau tidak, tiap kartu jadi satu GET ke s3. `flyers()`
+tidak mengecek keberadaan file (di s3 itu satu HEAD per kartu); baris lama tanpa
+`flyer_index` tetap dilayani dari raw.
+
 **Jangan re-host flyer.** Gambar full hanya untuk ekstraksi & audit internal.
 Yang tampil ke publik: data hasil ekstraksi + thumbnail kecil + link ke post asli.
 
-**Satu gambar carousel = satu paket.** Satu carousel sering memuat beberapa paket
+**Satu gambar carousel = satu penyusunan.** Satu carousel sering memuat beberapa paket
 berbeda (gambar 1 Ramadhan, gambar 2 Syawal). Vision menilai penanda
 harga/tanggal/durasi **per gambar**, dan tiap gambar penawaran disusun sendiri jadi
-barisnya sendiri: `storage/extracted/{media_id}-{n}.json`, kolom `flyer_index`,
-unique `(media_id, flyer_index)`. Gambar yang bukan penawaran tidak pernah dikirim
+filenya sendiri: `storage/extracted/{media_id}-{n}.json`, kolom `flyer_index`.
+Gambar yang bukan penawaran tidak pernah dikirim
 ke penyusun. Konsekuensinya: paket yang informasinya TERSEBAR di beberapa gambar
 (harga di slide 1, tanggal di slide 2) ditolak di gerbang — penandanya dinilai per
 gambar, bukan digabung.
+
+**Satu gambar boleh menjual banyak keberangkatan** (`departures[]`, kolom
+`offer_index`, unique `(media_id, flyer_index, offer_index)`). Flyer jadwal —
+tabel tanggal, "Edisi Agustus/September/Oktober", beberapa program dengan harga
+sendiri — itu bentuk paling umum di akun travel, dan sampai 2026-07-31 promptnya
+malah menyuruh "ambil yang paling menonjol, sisanya diabaikan": satu gambar berisi
+17 tanggal masuk sebagai 1 baris. Terukur di sampel: #232 → 17 baris jadwal,
+#273 → 6, #449 → 8.
+
+Bentuknya sengaja **bukan** tabel anak: penyusun mengisi field tingkat atas seperti
+biasa (keberangkatan yang paling menonjol) **dan** mendaftar semuanya di
+`departures[]` termasuk yang tingkat atas itu. Jadi hasil ekstraksi lama tanpa
+`departures` tetap jalan apa adanya, dan semua saringan yang sudah ada
+(`_missing`, `isPackageOffer()`, `isHaji()`) tetap menilai satu objek.
+`ImportExtractedPackages::offers()` yang meratakannya jadi N baris; field yang null
+di satu keberangkatan **diwarisi** dari tingkat atas (PPIU, kota, pembimbing,
+fasilitas tidak pernah ditulis ulang per baris), `extension` `unknown` = mewarisi
+sedangkan `none` = jawaban. Tabel `departures` sendiri dibuang dari
+`raw_extraction` tiap baris — isinya sama untuk semua baris dari gambar itu.
+
+Saringan yang jadi **per keberangkatan**: `sebelum_ambang` dan `belumLengkap()`.
+Postnya cuma dikecualikan kalau SEMUA keberangkatannya lewat ambang — flyer jadwal
+yang separuh barisnya kedaluwarsa tetap dipakai. Yang tetap per gambar: `bukan_paket`
+dan `haji`. Batasnya `MAX_DEPARTURES` = 40.
+
+**Baris "SOLD OUT" disaring di prompt, bukan di kode.** Flyer jadwal sering menandai
+baris yang sudah habis dengan stempel miring di atas satu baris tabel (juga "HABIS",
+"FULL BOOKED", "CLOSED", "WAITING LIST", harga dicoret). Tidak ada kolom
+`sold_out` — penyusun langsung tidak memasukkannya ke `departures`, dan baris begitu
+juga tidak boleh jadi field tingkat atas walau paling atas / paling besar. Supaya
+stempelnya sampai ke penyusun, `TRANSCRIBE_PROMPT` menyuruh vision menyalinnya di
+baris yang dikenainya (`[SOLD OUT]`, `[CORET]`), bukan dikumpulkan di akhir teks.
+Semua baris habis = `departures` [], harga & tanggal null → ditolak `belumLengkap()`,
+postnya tidak dikecualikan.
+
+Konsekuensinya hasil ekstraksi lama tidak otomatis memanen jadwalnya: filenya sudah
+ada, jadi `extract` melewatinya. Perlu `--force`/`--only` (bayar model lagi) atau
+tombol baca ulang per kartu.
 
 **Haji khusus bukan umroh — ditolak di import** (`isHaji()`, reason `haji`).
 Penanda travel **bukan** penandanya: "UMROH & HAJI PLUS" dan "UMRAH & HAJI KHUSUS"
@@ -169,8 +239,8 @@ Post asal ekstraksi ada di kolom `media_id`/`source_account` paket
 (sekaligus penunjuk folder flyernya); akun yang memposting ulang masuk kolom
 JSON `reposts` — audit saja, idempoten per `media_id`.
 
-Yang jadi **identitas baris** tetap `(media_id, flyer_index)`, bukan `dedup_key`.
-`importOne()` mengecek pasangan itu dulu dan melewatinya kalau sudah ada:
+Yang jadi **identitas baris** tetap `(media_id, flyer_index, offer_index)`, bukan `dedup_key`.
+`importOne()` mengecek ketiganya dulu dan melewatinya kalau sudah ada:
 `dedup_key` ikut berubah begitu ekstraksi ulang membaca "Saudia" jadi "Saudia
 Airlines", jadi cari lewat `dedup_key` saja = baris lama tidak ketemu, `create()`
 menabrak UNIQUE, dan exception-nya membatalkan **sisa backlog** — bukan cuma file
@@ -269,6 +339,25 @@ Caption dulu — 60-70% info ada di sana dan jauh lebih murah. Vision hanya
 dipanggil kalau field wajib masih kosong setelah pass caption. Gambar yang
 hash-nya sudah pernah diproses dilewat (flyer rebranding dari puluhan akun agen).
 
+**Pra-gerbang caption cuma boleh menolak, tidak pernah meloloskan.** Sebelum vision
+dipanggil, satu call teks (`readCaption()`, model penyusun) menilai captionnya saja:
+dokumentasi keberangkatan, manasik, pengumuman bagasi, ucapan hari besar berhenti di
+situ dan gambarnya tidak pernah dikirim ke model termahal di pipeline. Vonis "ini
+penawaran" tetap milik vision — caption travel sering cuma emoji + "chat admin"
+padahal flyernya paket lengkap, jadi ragu = lanjut. Jalan cuma kalau caption
+≥ `CAPTION_GATE_MIN` (200 char): di bawah itu tidak ada bukti yang cukup untuk
+menolak apa pun. `promo_generic` sengaja bukan kategori yang sah di sini — itu vonis
+"detailnya kurang" yang cuma bisa dijatuhkan setelah flyernya dilihat.
+
+Fail-open di semua cabang (`captionGate()`): JSON rusak, kategori asing, `tolak`
+tanpa kategori, semua model mati — semuanya jadi "lanjut ke vision", aturan yang
+sama dengan balasan vision yang tidak terbaca. Yang ditolak ditulis
+`_rejected_by: caption` dan lewat jalur penolakan yang sama dengan vision: import
+mengecualikan postnya (`bukan_paket`) dan **rawnya dihapus** — salah vonis berarti
+fetch ulang lewat tombol paksa. Terukur 2026-07-31 atas 15 caption asli: 2 ditolak
+(dua-duanya benar), 13 lanjut, nol flyer paket kejaring — termasuk lima caption
+promo yang diawali "Alhamdulillah"/"SOLD OUT" yang paling mirip dokumentasi.
+
 **Tanggal posting ikut dikirim ke penyusun** (`callExtractor($…, $postedAt)`).
 Flyer sering menulis "14 Maret" tanpa tahun; tanpa jangkar itu model memakai tahun
 berjalan dan paket 2027 masuk sebagai 2026 — lolos ambang keberangkatan. Aturannya
@@ -320,10 +409,28 @@ crawl".
 ```bash
 php artisan serve                  # http://localhost:8000
 php artisan queue:work             # SEMUA antrian sekaligus, paralel (Ctrl+C berhenti)
-php artisan test                   # 47 test: import+dedup+ambang, filter publik, regulasi, halaman akun
+php artisan test                   # 112 test: import+dedup+ambang, filter publik, regulasi, halaman akun, post manual, login
 php artisan packages:import        # storage/extracted/*.json -> database
 php artisan migrate:fresh --seed
+npm run build                      # WAJIB: CSS-nya lewat Vite, bukan CDN lagi
 ```
+
+**Tampilannya pakai token shadcn/ui, bukan React.** `resources/css/app.css` memuat
+token shadcn base "neutral" (`--background`, `--primary`, `--border`, …) yang
+dipetakan jadi utility Tailwind lewat `@theme inline`; resep kelas komponennya
+disalin ke Blade anonymous component di `resources/views/components/ui/`
+(`card`, `button`, `input`, `select`, `badge`, `field`). Tidak ada React/Inertia —
+aturan "satu form GET tanpa JS framework" tetap berlaku, jadi `npx shadcn add`
+tidak dipakai; komponen baru = tambah satu file Blade dengan kelas dari
+ui.shadcn.com. Ganti tema = ganti nilai di `:root`, bukan kelas per elemen.
+CDN `cdn.tailwindcss.com` dibuang: token itu tidak terbaca dari CDN, jadi
+tanpa `npm run build` halamannya tampil tanpa gaya.
+
+Komponen void (`x-ui.input`) **wajib ditutup `/>`**. Tanpa itu Blade menganggapnya
+tag yang dibuka, menelan sisa halaman jadi slotnya, dan tumbang sebagai
+`ParseError: expecting endif` di baris terakhir — jauh dari tag yang sebenarnya
+salah. Route yang cuma diuji sebagai tamu tidak menangkapnya: view-nya tidak pernah
+di-compile, jadi tiap halaman baru butuh satu test yang benar-benar `assertOk()`.
 
 **Tiga antrian, tidak tunggu-tungguan.** `queue:work` ditimpa oleh
 `App\Console\Commands\QueueWork` yang **meng-extend** `WorkCommand` bawaan:
@@ -390,26 +497,292 @@ scope status), bukan dari hasil yang sudah difilter: kalau ikut menyempit, memil
 satu kota membuang kota lain dari daftar dan pilihannya tidak bisa diganti tanpa
 reset. Select dengan < 2 pilihan tidak dirender (`status` saat publik).
 
-Klik judul kartu membuka **lightbox** `<dialog>` yang mengambil `/paket/{id}` lewat
+Klik judul kartu membuka **lightbox** `<dialog>` yang mengambil `/packages/{id}` lewat
 fetch; `show()` membalas `partials.detail` (potongan yang sama, tanpa layout) kalau
 `$request->ajax()`. `href`-nya tetap URL asli, jadi klik-tengah/tanpa JS tetap dapat
 halaman penuh.
 
-Panel "catatan & jejak" per kartu (form `review_verdict` + `review_note`) sementara
-dilepas dari UI. Endpoint `POST /paket/{id}/feedback` dan kolomnya masih ada.
+**Tiga tombol aksi per kartu, sebaris di bawah gambar** (pratinjau lokal saja):
+baca ulang (`POST /packages/{id}/extract`), segarkan (`POST /packages/{id}/fetch`),
+buang (`DELETE /packages/{id}`). Tooltipnya `title` bawaan browser.
 
-Daftar akun sumber di `/akun` (link dari panel pipeline): masukin username/URL/@handle
+**Status publikasi diubah dari kartu**, select tiga pilihan di bar aksi yang sama
+(`PATCH /packages/{id}/status`, whitelist `Package::STATUSES`). Manajemen paketnya
+tidak punya halaman sendiri: `/` dalam pratinjau sudah daftar paket berfilter, jadi
+antrean review = `?status=review` (facet `status` sudah ada, lengkap dengan
+jumlahnya). Simpannya lewat fetch tanpa reload — kalau halamannya dimuat ulang,
+kartu yang baru dipublish langsung keluar dari filter yang sedang dipakai dan sisa
+kartunya bergeser di tengah kerja.
+
+Statusnya tiga: `draft` dan `review` sama-sama belum publik (bedanya cuma asal —
+`_needs_review` dari ekstraksi jadi `review`), `published` yang tampil ke
+pengunjung. `rejected` di komentar migrasi **tidak dipakai**: paket yang ditolak
+dihapus barisnya lewat ×, jadi tidak ada baris untuk ditempeli status itu.
+
+Baca ulang wajib tiga langkah, bukan cuma dispatch `ExtractPost`: flyer
+dikembalikan ke `storage/raw` (`Package::restoreFlyer()`, kebalikan
+`promoteFlyer()` — extract cuma membaca raw), hasil ekstraksi lama dihapus, dan
+**barisnya dihapus** karena `importOne()` tidak pernah menimpa baris yang sudah
+ada. Yang dikembalikan **semua** slide se-`media_id`, bukan cuma paket itu: nomor
+slide dari vision menunjuk gambar ke-N yang *dikirim*, jadi satu gambar hilang
+menggeser penomoran paket sebelahnya. Postnya tidak dikecualikan dan `post.json`
+tidak disentuh — ini bukan vonis "bukan paket".
+
+Segarkan (dulu "ambil ulang") = download ulang **plus** baca ulang, bukan download
+doang. Menghapus folder raw postnya (kalau tidak, fetch melewatinya: "sudah ada di
+storage/raw"), hasil ekstraksinya, dan **semua baris se-`media_id`** lewat
+`deleteSources()` + `delete()`, lalu `FetchAccount`. Tiga penghapusan itu wajib:
+`ExtractPending` melewati post yang sudah punya file di `storage/extracted`, dan
+`importOne()` tidak pernah menimpa baris yang sudah ada — jadi tanpa itu download
+ulangnya tidak mengubah apa pun yang tampil. Sisanya jalan sendiri: `FetchAccount`
+→ `ExtractPending` → `ExtractPost` → `ImportPackages`.
+
+Se-`media_id`, bukan cuma paket itu, dengan alasan yang sama seperti baca ulang:
+nomor slide dari vision menunjuk gambar ke-N yang *dikirim*. Postnya tidak
+dikecualikan. Konsekuensinya kalau fetch gagal atau postnya di luar `--limit`,
+barisnya hilang untuk sementara sampai fetch berikutnya berhasil.
+
+**Tombol "baca ulang AI" di `/accounts/{id}/posts` TIDAK melewati gerbang vision.**
+Yang dilepas cuma bloknya (baris `excluded_posts` + jejak bacaan lama) supaya
+postnya boleh dibaca lagi; vonis "ini penawaran umroh atau bukan" tetap milik
+vision, karena cuma dia yang melihat pixelnya. Sempat ada `--no-gate` di jalur ini
+(`ExtractPost($media, noGate: true)`) — dibuang: tanpa gerbang, post yang
+flyernya cuma ucapan hari raya + caption "chat admin" ikut disusun jadi paket,
+dan itu persis yang gerbangnya ada untuk mencegah. Salah vonis = perbaiki
+promptnya (`TRANSCRIBE_PROMPT`), bukan matikan gerbangnya per post.
+
+Urutannya: baris `excluded_posts` dilepas dulu (itu yang bikin extract melewatinya),
+hasil ekstraksi lama dihapus, baris paket se-`media_id` dikembalikan flyernya lalu
+dihapus. Yang **tidak** dilakukan: men-scrap ulang akunnya. Raw postnya sudah dihapus
+(post ditolak memang filenya dibuang) = tombolnya menolak dengan pesan, bukan
+mengantrikan `FetchAccount` — satu klik per post tidak boleh membakar kuota Graph
+untuk seluruh akun. Download ulang tombolnya sendiri: scrap paksa di `/accounts`.
+
+Lolos gerbang **tidak** berarti pasti jadi baris: `belumLengkap()` tetap berlaku,
+dan post tanpa harga di flyer maupun caption tetap tidak masuk DB (tidak dikecualikan
+juga, filenya ditinggal di `storage/extracted`).
+
+**Satu halaman post, dua ruang lingkup: `/posts` (semua akun) dan
+`/accounts/{account}/posts`** — dua route, satu `PostController::index(?SourceAccount)`,
+satu view `posts.blade.php`. Yang beda cuma himpunannya; tab, tabel, dan aksinya
+dipakai bersama. Halaman semua post menambah kolom **akun** (peta `username -> id`
+sekali query, bukan satu query per baris) dan memotong 60 baris per halaman
+(`LengthAwarePaginator` atas Collection — himpunannya dirakit dari disk + dua tabel,
+tidak ada yang bisa di-`LIMIT`); prev/next dirender sendiri karena `links()` bawaan
+memakai kelas Tailwind v3 yang tidak ada di build v4. Jejak scrap cuma muncul di
+halaman per-akun.
+
+**Aksinya sengaja TIDAK dilingkupi akun**: `POST /posts/bulk` (`action` =
+`extract|block|unblock`), `POST /posts/{media}/extract`, `GET /posts/{media}/{i}.jpg`.
+`media_id` sudah unik, dan `PostController::akun()` mencari akunnya sendiri (raw dulu,
+lalu `excluded_posts`, lalu baris paket) — kalau dilingkupi, tiap aksi butuh dua jalur:
+satu untuk halaman akun, satu untuk halaman semua post. `unblock` cuma membuang
+barisnya `excluded_posts`; tidak ada file yang disentuh, gambarnya baru ada lagi setelah
+scrap berikutnya.
+
+**Tabel, bukan grid kartu.** Yang dibaca operator itu caption + alasan berdampingan, dan
+mengoreksi vonis `bukan_paket` berarti menyapu belasan baris sekaligus, bukan satu
+tombol per kartu. Captionnya `<details>` yang di-clamp 2 baris — klik untuk penuh, tanpa
+JS. Checkbox-nya menunjuk `<form id="bulk">` di luar tabel lewat `form="bulk"`, sama
+seperti `/accounts`, karena kolom aksi sudah memuat form per baris. Status publikasi tiap
+paket ada di kolom status sebagai select (`PATCH /packages/{id}/status` lewat fetch,
+tanpa reload) — aturannya sama dengan bar aksi kartu di `/`. Aksinya memanggil method
+privat yang sama dengan tombol per barisnya (`bacaUlang()`, `blokir()`) — tidak ada jalur
+kedua yang bisa menyimpang. Post yang rawnya sudah dibuang dilewat diam-diam saat
+`extract` dan dihitung di pesannya.
+
+**Post yang tidak terjangkau fetch dimasukkan tangan lewat `/posts/create`.**
+`business_discovery` mengembalikan media urut **timestamp turun**, bukan urutan grid
+instagram.com — pinned post **tidak** diangkat ke atas. Terukur di `mahyaatourtravel`
+(841 post): `--limit=9` memberi 9 post beruntun 26–31 Juli, sementara flyer yang di-pin
+19 minggu lalu duduk di posisi ke-300-an. Paging mundur sejauh itu membakar `total_time`
+untuk ratusan post yang tidak dipakai, jadi jalurnya form: permalink + akun + tanggal
+posting + caption + gambar, nol request ke Graph.
+
+Tidak ada API yang bisa dipakai untuk satu post: media ID tidak bisa di-GET terpisah,
+`business_discovery` cuma punya `.after()`/`.limit()`, dan `instagram_oembed` butuh app
+review lalu tidak mengembalikan caption maupun thumbnail. URL post juga tidak memuat
+username — itu cuma ada di HTML halaman, dan membacanya = scraping unofficial.
+
+`media_id`-nya **hasil decode shortcode**, bukan `manual_<slug>`: shortcode itu base64
+URL-safe dari pk media (`DV-tyQIkuw5` → `3854719696466275385`), jadi deterministik —
+dua contributor yang mengirim post yang sama dapat id yang sama dan kiriman kedua
+menimpa. Wajib numerik karena route `flyer`/`posts.raw` dikunci `whereNumber`; id
+non-numerik = kartunya tampil tanpa gambar.
+
+Yang ditulis cuma `storage/raw/{user}/{media}/` persis sebentuk `savePost()` di
+`probe.php`; sesudah itu **tidak ada jalur khusus**. Gerbang vision tetap menilai
+(kiriman manusia bukan vonis "ini paket"), `belumLengkap()` tetap berlaku, dan hasilnya
+tetap `draft`/`review` — tidak ada yang bisa langsung publish lewat sini. Akun yang
+belum terdaftar dibuat sekalian sebagai `approved`, sama seperti textarea di `/accounts`.
+
+Kiriman ulang **menimpa**: baris `excluded_posts` dilepas (post yang divonis mesin
+`bukan_paket` memang boleh masuk lewat sini), lalu raw + hasil ekstraksi + baris paket
+se-`media_id` dibuang lewat `hapusJejak()` — method yang sama dengan tombol blokir,
+bedanya cuma arah `excluded_posts`-nya. Tanpa itu `importOne()` melihat barisnya sudah
+ada dan kiriman kedua diam-diam tidak mengubah apa pun.
+
+**Tanggal posting wajib diisi dan jangan dikira-kira.** Itu jangkar tahun buat penyusun;
+jangkar yang salah menggeser paket 2027 jadi 2026 dan lolos ambang keberangkatan. Upload
+png/webp di-encode ulang jadi `{n}.jpg` (seluruh pipeline menamai slide begitu) dan
+**diratakan ke putih** dulu — `imagejpeg()` membuang kanal alpha, dan flyer transparan
+keluar berlatar hitam sehingga tulisannya tidak terbaca vision.
+
+Halamannya ada di grup `auth`, jadi **belum** jalur contributor luar: tabel `users` tidak
+punya kolom `role`, dan login berarti dapat `/accounts` lengkap dengan bulk hapus akun
+dan `DELETE /pipeline/queue`. Untuk sekarang operator yang memasukkan kirimannya.
+
+**Balasan vision yang tidak terbaca bukan vonis.** `jsonOf()` balik `[]` diam-diam
+kalau JSON-nya rusak/terpotong, dan `visionVerdict([])` membacanya jadi
+`post_kind=other` — dulu itu ditulis sebagai hasil ekstraksi, jadi import
+mengecualikan postnya **selamanya** dan menghapus rawnya padahal modelnya cuma
+gagal menjawab. Terukur 2026-07-31: 46 dari ~200 ekstraksi di `pipeline.jsonl`
+tercatat `post_kind=other, 0/0 gambar`, dan 8 dari 18 file gate-rejected yang masih
+ada transkripnya kosong. Sekarang `slides` kosong = `cmdExtract()` melewati postnya
+tanpa menulis apa pun: rawnya tetap ada, extract berikutnya mencobanya lagi, gratis.
+Jumlah slide 0 selalu berarti balasan rusak — vision cuma dipanggil kalau ada gambar
+dan promptnya menuntut satu entri per gambar.
+
+Panel "catatan & jejak" per kartu (form `review_verdict` + `review_note`) sementara
+dilepas dari UI. Endpoint `POST /packages/{id}/feedback` dan kolomnya masih ada.
+
+Daftar akun sumber di `/accounts` (link dari panel pipeline): masukin username/URL/@handle
 satu per baris (parsernya `SourceAccount::usernameOf()`, dipakai juga oleh
 `packages:crawl`), lihat status + `last_fetched_at` + jumlah post/paket/dikecualikan per akun,
-plus tombol `scrap` per akun dan `Scrap semua` (lewat `packages:crawl --limit=9`, sama
-seperti tombol pipeline di `/`, cuma tanpa seed `accounts.txt`). Akun yang ditambah dari
-sini langsung `approved` — operator lokal memang si pemberi approval.
+plus tombol `scrap` per akun dan `Scrap semua` (lewat `packages:crawl --limit=9`). Akun
+yang ditambah dari sini langsung `approved` — operator lokal memang si pemberi approval.
+
+**Tidak ada tombol "jalankan pipeline".** Yang mengantrikan job cuma `scrap`/`Scrap
+semua` di `/accounts` dan `packages:crawl` di CLI; `queue:work` yang mengerjakan ketiga
+antrian. Yang ada di panel itu kebalikannya: **batal** — `DELETE
+/pipeline/queue/{queue?}` (`PipelineController::clear`). Tanpa `{queue}` semua
+antrian; dengan `ig|ai|db` (whitelist `PipelineController::QUEUES`, nilai asing 404)
+cuma antrian itu, jadi fetch yang macet bisa dibuang tanpa membunuh ekstraksi yang
+sedang jalan. Yang dihapus: `jobs` + `failed_jobs` (difilter per antrian) +
+`cache_locks` (selalu seluruhnya — kuncinya tidak menyimpan nama antrian, jadi tidak
+bisa dipilih; dibuang karena lock `unique` milik job yang dihapus tidak ada yang
+melepas dan job sejenis berikutnya kelihatan hilang diam-diam sampai `uniqueFor` habis).
+
+Sebelahnya **ulangi** — `POST /pipeline/queue/retry/{queue?}`
+(`PipelineController::retry`), bungkus tipis `queue:retry`. Kata kerjanya di depan
+karena parameter opsional wajib di segmen terakhir. `cache_locks` sengaja **tidak**
+disentuh di sini: retry mendorong payloadnya langsung, tidak lewat dispatcher, jadi
+lock `unique` tidak dicek ulang. Mayoritas isi `failed_jobs` memang layak diulang —
+worker di-Ctrl+C, `database is locked`, model timeout.
+
+Panel juga menampilkan **sebab** kegagalan, bukan cuma jumlahnya
+(`antrian_per.{q}.pesan_gagal`): baris pertama `exception` kegagalan terakhir per
+antrian, diambil lewat `max(id)` — kolom itu stacktrace penuh, narik semua barisnya
+berarti ratusan KB tiap polling 2 detik.
+
+**Ctrl+C bukan job gagal.** Sinyal kena satu grup proses, jadi `probe.php` yang
+dijalankan `FetchAccount`/`ExtractPost` ikut mati dan Symfony melempar
+`ProcessSignaledException` — bukan exit code, jadi `$result->failed()` tidak pernah
+kepakai. Dua-duanya menangkapnya lalu `release()`. Kalau dilempar, tiap kali worker
+dihentikan manual jobnya mendarat di `failed_jobs`, dan di `FetchAccount` sekalian
+menstempel `last_error` sehingga akunnya kelihatan gagal di `/accounts`.
+
+**Reservasi yatim dilepas saat induk `queue:work` start.** Worker yang di-kill di
+tengah job meninggalkan `reserved_at` terisi, dan job itu baru diklaim ulang setelah
+`DB_QUEUE_RETRY_AFTER` (1200 detik) — jadi sesudah restart antrian kelihatan "3 jalan"
+selama 20 menit padahal tidak ada prosesnya. Guard `pgrep` di `QueueWork::handle()`
+sudah memastikan tidak ada worker lain hidup, jadi reservasi yang tersisa pasti yatim.
+`retry_after`-nya jangan diturunkan: itu jaring untuk job yang memang lama (satu
+carousel ke vision + penyusun), dan menurunkannya bikin job yang masih jalan diambil
+worker kedua.
+
+Job yang **sedang** dikerjakan tetap selesai — barisnya masih ada di `jobs` dengan
+`reserved_at` terisi, dihapus lebih awal saja, dan `delete()` worker sesudahnya jadi
+no-op. Makanya `antrian_per.{q}` memisah `antri` (`reserved_at is null`) dari `proses`:
+"3 antri" yang sebenarnya "2 antri + 1 jalan" bikin panel kelihatan macet padahal
+tidak. Bar progress per antrian dihitung **di browser** dari puncak antrian yang pernah
+terlihat sejak halaman dibuka (job selesai tidak meninggalkan jejak yang bisa dihitung),
+jadi reload = bar mulai lagi dari 0%.
+
+**Profil akun ikut diambil saat fetch, tapi cuma yang memang ada di API.**
+`business_discovery` menyediakan `name`, `followers_count`, `follows_count`,
+`media_count`, `profile_picture_url` — diminta **hanya di halaman pertama** (nilainya
+sama di tiap halaman, dan yang mengikat kuota itu `total_time`). Status **verified**
+dan **tanggal bergabung** tidak ada: dijawab `#100 nonexisting field`, jangan dicari lagi.
+Sudah dicek dua arah: tabel field IG User di dokumentasi resmi (`alt_text`, `biography`,
+`followers_count`, `follows_count`, `has_profile_pic`, `id`, `is_published`,
+`legacy_instagram_user_id`, `media_count`, `name`, `profile_picture_url`,
+`collaborative_media_search`, `shopping_product_tag_eligibility`, `username`, `website`)
+tidak memuatnya, dan tujuh nama kandidat (`is_verified`, `is_verified_user`, `verified`,
+`is_verified_account`, `verification_status`, `is_business_account`, `account_type`)
+semuanya dijawab `#100`. Blog pihak ketiga yang bilang sebaliknya salah.
+
+`probe.php` menulisnya ke `storage/profiles/{username}.json` + `.jpg`, `FetchAccount`
+memindahkannya ke kolom `source_accounts` lewat `SourceAccount::profileFromDisk()` saat
+fetch berhasil (file tidak ada = kolomnya tidak disentuh, bukan dikosongkan).
+
+Untuk mengisi/menyegarkan tanpa men-scrap post: `php artisan accounts:profile [--all]`
+(defaultnya cuma akun yang `followers_count`-nya masih kosong). Jalurnya
+`php probe.php profile <username…>` — `business_discovery` **tanpa** ekspansi
+`media{children{}}`, dan ekspansi itulah yang membakar `total_time`; 196 akun terukur
+cuma menggerakkan kuota beberapa persen, sementara `fetch` ulang untuk jumlah yang sama
+akan menghabiskannya. Satu akun yang gagal tidak menghentikan sisa daftarnya. Foto profilnya **di-download**, bukan disimpan
+URL-nya — `profile_picture_url` itu signed CDN `scontent` yang mati dalam hitungan hari,
+aturan yang sama dengan `media_url`; dilayani route `/avatar/{username}.jpg` yang juga
+dikunci ke env local. Bukan di `storage/raw` karena raw itu per-post dan ikut di-prune.
+
+Angka di baris akun ada **dua satuan**: `pengikut/diikuti/post IG` itu isi akunnya di
+Instagram, sedangkan `terunduh/paket/ditolak` cuma yang sudah masuk pipeline kita —
+`media_count` 1.445 vs 9 terunduh itu wajar, bukan tanda ada yang hilang.
+
+Daftarnya tabel dengan kolom yang bisa diurut lewat query string (`?sort=&dir=`,
+whitelist `AccountController::SORTS` — `account`/`followers`/`following`/`ig_posts`/
+`downloaded`/`packages`/`rejected`/`last_fetched`, nilai asing balik ke urutan default).
+Urutnya **di PHP**, bukan SQL: tiga kolomnya (`downloaded`/`packages`/`rejected`)
+dihitung dari `storage/raw` + tabel lain, jadi tidak ada kolom yang bisa di-`ORDER BY`.
+
+Satu jebakan Blade di `accounts.blade.php`: file ini memakai directive php **sebaris**
+(`@php(...)`), dan blok raw dipungut compiler **sebelum** komentar dibuang — jadi
+menyebut penutup bloknya di dalam `{{-- --}}` sekalipun akan dipasangkan dengan
+directive sebaris di atasnya dan menelan markup di antaranya jadi PHP mentah (HTTP 500).
 
 Urutannya: yang **gagal** paling atas, lalu yang belum pernah di-scrap, sisanya menurut
 `last_fetched_at`. Alasan gagal ada di kolom `source_accounts.last_error` — diisi saat
 fetch gagal, dikosongkan saat berhasil, jadi isinya status percobaan terakhir dan bukan
 riwayat. `last_fetched_at` tetap penanda terakhir **berhasil**, jadi satu baris bisa
 menampilkan dua-duanya sekaligus.
+
+**"Gagal" bukan sekadar `last_error` terisi** (`SourceAccount::gagal()`): harus error
+DAN belum pernah berhasil di-scrap DAN kosong beneran — nol post terunduh, nol paket,
+nol post dikecualikan. Rate limit, `database is locked`, dan timeout menempel di akun
+yang datanya sudah ada; terhitung 25 dari 189 akun berstempel "gagal" padahal isinya ada
+dan tidak ada yang perlu ditindak. Yang error tapi berisi tetap menampilkan pesannya
+(abu-abu, bukan merah) dan tidak naik ke atas.
+
+**Tidak ada tombol "scrap semua".** Tanpa filter, 189 akun masuk antrian `ig` yang cuma
+satu worker — kuota Graph (`total_time`) habis di tengah jalan dan sebagian besar akun
+cuma di-fetch ulang untuk post yang itu-itu juga. `fetchAll()` menolak request tanpa
+satu pun filter, bukan mengartikannya "semua". Yang tersisa tiga tombol, semuanya cuma
+opsi `packages:crawl`: **yang gagal** (`--failed`), **yang belum pernah** (`--new`), dan
+**> N jam** (`--cooldown=N`, input angkanya di sebelah tombol) — yang terakhir itu untuk
+putaran rutin. Dispatch-nya diurut **terlama duluan**: satu worker + kuota yang bisa
+habis di tengah jalan berarti urutan menentukan siapa yang kebagian.
+
+`--failed` menyaring `last_fetched_at` null + `last_error` terisi saja — "kosong beneran"
+itu hitungan dari disk + tabel lain, tidak ada kolomnya untuk di-`WHERE`. Yang kelebihan
+cuma akun yang postnya kadung terunduh lalu fetch-nya putus, dan itu memang yang mau
+diulang.
+
+**Bulk scrap/blokir/hapus lewat centang per baris** (`POST /accounts/bulk`,
+`AccountController::bulk`, `action` = `crawl|force|block|delete`). Satu endpoint, bukan
+empat: yang beda cuma satu cabang di dalam loop, dan tindakannya memanggil method model
+yang sama dengan tombol per barisnya (`purge()`, `purgeAndDelete()`, `FetchAccount`) —
+tidak ada jalur kedua yang bisa menyimpang. Akun `blocked` dilewat diam-diam saat
+`crawl`/`force`.
+
+Checkbox-nya menunjuk ke `<form id="bulk">` **di luar tabel** lewat atribut HTML5
+`form="bulk"`. Tabelnya sudah memuat form per baris di kolom terakhir; kalau tabelnya
+dibungkus form lagi, form bersarang itu tidak valid dan browser membuang yang di dalam —
+tombol scrap/blokir/× per baris mati diam-diam. JS-nya cuma tampilan (bar muncul, angka
+terpilih, pilih semua, shift-klik pilih serentetan) + konfirmasi; submitnya form biasa.
+Shift-klik memang tidak ada bawaannya — checkbox tidak saling kenal, jadi jangkarnya
+(baris yang diklik terakhir) disimpan sendiri dan daftar barisnya dibaca ulang tiap klik
+supaya ikut urutan `?sort=` yang sedang tampil.
 
 Yang perlu diingat soal `$this->fail()`: dia menandai job gagal tapi **tidak
 menghentikan `handle()`**. Tanpa `return` sesudahnya, akun yang gagal ikut distempel
@@ -426,9 +799,61 @@ tiap 5 menit sampai `retryUntil` 2 jam habis. Username salah / token mati / resp
 ditolak → `fail()` sekali, masuk `failed_jobs`, **tidak** diulang sendiri; jalankan
 `php artisan queue:retry all` atau tekan `scrap` lagi.
 
-Review, pratinjau, dan tombol pipeline semuanya di `/` — `abort_unless(isLocal())`,
-jadi tidak pernah kebuka di produksi. Tidak ada login dan tidak ada tabel `users`.
+**Gerbangnya login, bukan `app()->isLocal()`.** Dulu semua alat kerja dikunci
+`abort_unless(app()->isLocal(), 404)` per-method. Itu cukup selama portalnya cuma
+jalan di laptop, tapi begitu di-deploy `/accounts` jadi 404 buat pemiliknya sendiri —
+env sebagai kunci berarti pilihannya cuma "mati" atau "terbuka buat semua orang".
+
+Sekarang satu grup `Route::middleware('auth')` di `routes/web.php` menampung semua
+alat kerja: `/accounts` + aksinya, `/pipeline/*`, `/avatar/*`, dan keempat aksi per
+kartu (`feedback`, `destroy`, `reextract`, `refetch`). Kuncinya di route, bukan di
+dalam controller, supaya method baru di controller yang sudah ada ikut terkunci
+tanpa perlu ingat menambahkan `abort_unless`. Yang publik tinggal tiga: `/`,
+`/packages/{id}` (published saja), dan `/flyers/{media}/{i}.jpg` (published saja).
+
+Pratinjau di `/` (paket non-published + tiga tombol aksi per kartu) menyala kalau
+`$request->user() !== null`; `?all=0` mematikannya buat melihat persis seperti
+pengunjung. Tamu tidak pernah dapat tombolnya — yang dirender pun tidak.
+
+**URI, nama route, dan query param semuanya bahasa Inggris; label UI tetap
+Indonesia.** Batasnya jelas: yang masuk address bar, bookmark, log akses, dan
+`route:list` itu permukaan teknis — dibaca alat dan orang lain, jadi ikut konvensi
+Laravel. Teks yang dibaca operator (label kolom, pesan `with('status')`, tooltip,
+komentar) tetap Indonesia; itu bahasa produknya. Jangan campur: `?sort=paket` yang
+menghasilkan label "paket" bikin kelihatan seolah nilainya berasal dari data.
+
+Auth-nya persis konvensi Breeze walau starter kit-nya tidak dipasang: `/login` +
+`/logout`, `Auth\AuthenticatedSessionController` dengan `create`/`store`/`destroy`,
+`resources/views/auth/login.blade.php`, field `remember`. Nama route `login`
+**wajib** — itu yang dituju middleware `auth` saat menolak tamu.
+
+Sisanya jamak + kata kerja Inggris: `/accounts`, `/accounts/crawl`, `/accounts/bulk`,
+`/posts` + `/accounts/{account}/posts` (`?filter=packages|rejected|pending`),
+`/posts/bulk`, `/posts/create` + `POST /posts`, `/posts/{media}/extract`, `/packages/{id}`,
+`/pipeline/queue/{queue?}`, `/pipeline/queue/retry/{queue?}`, `/flyers/{media}/{i}.jpg`.
+Param: `?all=` (pratinjau), facet `?account=`, `?sort=` + `?dir=`, `new`/`failed`/`hours`
+(scrap kelompok), `force` (scrap paksa), `unblock`, `action` (bulk).
+
+**Kunci JSON `/pipeline/status` sengaja TIDAK ikut** (`post_diunduh`, `hasil_ekstraksi`,
+`antri_ig`, `alasan`, `sekarang`, `jalan`). Itu payload internal buat satu panel di
+`accounts.blade.php`, bukan API, dan namanya justru menjelaskan aturan corong yang
+ditulis panjang di dokumen ini — menerjemahkannya memutus rujukan itu tanpa ada yang
+membaca hasilnya.
+
+Tidak ada halaman daftar dan tidak ada reset lewat email (`MAIL_MAILER=log`, tidak
+ada email yang benar-benar keluar). Akun dibuat dari CLI:
+`php artisan user:create <email>` — email yang sudah ada sandinya diganti, jadi itu
+sekaligus jalur "lupa sandi". Tabel `users` cuma email + password; tidak ada kolom
+`role` karena tidak ada peran kedua. Login POST-nya `throttle:5,1`.
 Manajemen datanya langsung ke SQLite (`database/database.sqlite`) atau `artisan tinker`.
+
+**Sebelum deploy:** `APP_DEBUG=false` (halaman error debug memuat isi env — itu
+jalur bocornya `IG_ACCESS_TOKEN` & `AI_API_KEY` yang paling gampang),
+`APP_ENV=production`, `SESSION_SECURE_COOKIE=true` (butuh HTTPS), `FLYER_DISK=s3`
++ `AWS_*`, lalu `php artisan migrate --force` dan `npm run build`. `.env`,
+`database/*.sqlite`, `storage/raw|extracted|profiles|flyers` semuanya di-gitignore;
+tidak ada `env()` di luar `config/` (kecuali `probe.php`, yang punya pembacanya
+sendiri dan tidak lewat Laravel), jadi `php artisan config:cache` aman.
 
 `/pipeline/status` mengembalikan corong progres, `sekarang` (baris terakhir per
 antrian), dan `log` (80 baris terakhir). Corongnya: `akun`/`terfetch`/`akun_gagal`
@@ -469,10 +894,11 @@ php artisan queue:work          satu perintah, tiga antrian jalan paralel
           / (review + pratinjau lokal)  ->  status=published  ->  / (publik)
 ```
 
-Pemicunya: tombol di `/` (atau `php artisan packages:crawl accounts.txt`) yang cuma
-mengantrikan job. Tidak ada langkah manual di antara fetch, extract, dan import —
+Pemicunya: tombol `scrap` di `/accounts` (atau `php artisan packages:crawl accounts.txt`)
+yang cuma mengantrikan job. Tidak ada langkah manual di antara fetch, extract, dan import —
 `ig` menyelesaikan satu akun, `db` langsung memindainya ke `ai`, dan `ai` tidak
 menunggu akun berikutnya.
 
 Paket masuk sebagai `review` atau `draft`, tidak pernah langsung `published`.
-Publish = ubah `status` jadi `published` langsung di DB, setelah datanya dilihat.
+Publish = pilih `published` di select status pada kartu (pratinjau `/`), setelah
+datanya dilihat.

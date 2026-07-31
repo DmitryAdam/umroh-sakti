@@ -28,27 +28,24 @@ class PublicSearchTest extends TestCase
         return $p;
     }
 
-    /** Catatan koreksi cuma boleh dari pratinjau lokal, dan tidak mengubah status publikasi. */
-    public function test_catatan_koreksi_tersimpan_dan_dikunci_ke_lokal(): void
+    /** Catatan koreksi cuma boleh dari pratinjau operator, dan tidak mengubah status publikasi. */
+    public function test_catatan_koreksi_tersimpan_dan_butuh_login(): void
     {
         $package = $this->package(['status' => 'review']);
 
-        $this->post("/paket/{$package->id}/feedback", ['review_verdict' => 'bukan_paket'])
-            ->assertNotFound();
+        $this->post("/packages/{$package->id}/feedback", ['review_verdict' => 'bukan_paket'])
+            ->assertRedirect(route('login'));
 
-        // Env dipaksa local supaya guardnya kebuka; CSRF-nya jadi ikut aktif karena
-        // Laravel cuma melewatinya saat env = testing.
-        app()['env'] = 'local';
-        config(['app.env' => 'local']);
+        $this->actingAsOperator();
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
-        $this->post("/paket/{$package->id}/feedback", [
+        $this->post("/packages/{$package->id}/feedback", [
             'review_verdict' => 'bukan_paket',
             'review_note' => 'ini poster daftar hotel',
         ])->assertRedirect();
 
         // Jalur AJAX: balas JSON, jangan redirect — halaman tidak boleh reload.
-        $this->postJson("/paket/{$package->id}/feedback", ['review_verdict' => 'oke'])
+        $this->postJson("/packages/{$package->id}/feedback", ['review_verdict' => 'oke'])
             ->assertOk()
             ->assertJson(['saved' => $package->id]);
 
@@ -76,15 +73,12 @@ class PublicSearchTest extends TestCase
         File::ensureDirectoryExists($raw);
         file_put_contents("$raw/post.json", '{}');
 
-        $this->deleteJson("/paket/{$package->id}")->assertNotFound();
+        $this->deleteJson("/packages/{$package->id}")->assertUnauthorized();
 
-        // Env dipaksa local supaya guardnya kebuka; CSRF ikut aktif karena Laravel
-        // cuma melewatinya saat env = testing.
-        app()['env'] = 'local';
-        config(['app.env' => 'local']);
+        $this->actingAsOperator();
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
-        $this->deleteJson("/paket/{$package->id}")->assertOk();
+        $this->deleteJson("/packages/{$package->id}")->assertOk();
 
         $this->assertSame(0, Package::count());
         $this->assertDirectoryDoesNotExist($raw);
@@ -108,11 +102,10 @@ class PublicSearchTest extends TestCase
         File::ensureDirectoryExists($raw);
         file_put_contents("$raw/post.json", '{}');
 
-        app()['env'] = 'local';
-        config(['app.env' => 'local']);
+        $this->actingAsOperator();
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
-        $this->deleteJson("/paket/{$buang->id}")->assertOk();
+        $this->deleteJson("/packages/{$buang->id}")->assertOk();
 
         $this->assertSame(1, Package::count());
         $this->assertFileExists("$raw/post.json", 'flyer slide lain ikut hilang');
@@ -123,13 +116,12 @@ class PublicSearchTest extends TestCase
         File::deleteDirectory(storage_path('raw/agen_y'));
     }
 
-    /** Panel pipeline itu alat kerja lokal — jangan pernah kebuka di produksi. */
-    public function test_panel_pipeline_dikunci_ke_lokal(): void
+    /** Panel pipeline itu alat kerja operator — tamu tidak pernah dapat angkanya. */
+    public function test_panel_pipeline_butuh_login(): void
     {
-        $this->getJson('/pipeline/status')->assertNotFound();
+        $this->getJson('/pipeline/status')->assertUnauthorized();
 
-        app()['env'] = 'local';
-        config(['app.env' => 'local']);
+        $this->actingAsOperator();
 
         $this->getJson('/pipeline/status')
             ->assertOk()
@@ -140,6 +132,61 @@ class PublicSearchTest extends TestCase
             ]);
     }
 
+    /** Tombol batal membuang antrian + daftar gagal, dan tetap butuh login. */
+    public function test_batalkan_antrian_mengosongkan_jobs_dan_failed_jobs(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+        $this->deleteJson('/pipeline/queue')->assertUnauthorized();
+
+        $this->actingAsOperator();
+
+        \Illuminate\Support\Facades\DB::table('jobs')->insert([
+            ['queue' => 'ig', 'payload' => '{}', 'attempts' => 0, 'available_at' => time(), 'created_at' => time()],
+            ['queue' => 'ai', 'payload' => '{}', 'attempts' => 0, 'available_at' => time(), 'created_at' => time()],
+        ]);
+        \Illuminate\Support\Facades\DB::table('failed_jobs')->insert([
+            ['uuid' => 'u1', 'connection' => 'database', 'queue' => 'ig', 'payload' => '{}',
+                'exception' => 'x', 'failed_at' => now()],
+        ]);
+
+        // Batal per antrian: cuma antrian itu yang dibuang, tetangganya tetap.
+        $this->deleteJson('/pipeline/queue/ig')
+            ->assertOk()
+            ->assertJson(['antri_ig' => 0, 'antri_ai' => 1, 'gagal' => 0]);
+
+        $this->assertSame(['ai'], \Illuminate\Support\Facades\DB::table('jobs')->pluck('queue')->all());
+
+        $this->deleteJson('/pipeline/queue')
+            ->assertOk()
+            ->assertJson(['antrian' => 0, 'gagal' => 0, 'jalan' => false]);
+
+        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('jobs')->count());
+        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('failed_jobs')->count());
+
+        // Nama antrian asing tidak boleh jadi "hapus semua".
+        $this->deleteJson('/pipeline/queue/default')->assertNotFound();
+    }
+
+    /** Job yang sedang dikerjakan tetap kehitung — barisnya cuma ber-`reserved_at`. */
+    public function test_status_memisah_job_antri_dan_job_jalan_per_antrian(): void
+    {
+        $this->actingAsOperator();
+
+        \Illuminate\Support\Facades\DB::table('jobs')->insert([
+            ['queue' => 'ai', 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null,
+                'available_at' => time(), 'created_at' => time()],
+            ['queue' => 'ai', 'payload' => '{}', 'attempts' => 1, 'reserved_at' => time(),
+                'available_at' => time(), 'created_at' => time()],
+        ]);
+
+        $this->getJson('/pipeline/status')
+            ->assertOk()
+            ->assertJson([
+                'antri_ai' => 1,
+                'antrian_per' => ['ai' => ['antri' => 1, 'proses' => 1, 'gagal' => 0]],
+            ]);
+    }
+
     /**
      * Corong pipeline: tiap tahap dihitung dari sumbernya, tidak ada tabel progress.
      * Yang gampang salah itu pecahan status paket — kalau `published` ikut kehitung
@@ -147,8 +194,7 @@ class PublicSearchTest extends TestCase
      */
     public function test_corong_pipeline_memecah_status_paket_dan_alasan_pengecualian(): void
     {
-        app()['env'] = 'local';
-        config(['app.env' => 'local']);
+        $this->actingAsOperator();
 
         $this->package(['status' => 'review', 'media_id' => 'a']);
         $this->package(['status' => 'review', 'media_id' => 'b']);

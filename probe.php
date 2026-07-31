@@ -17,11 +17,20 @@
 
 declare(strict_types=1);
 
+// Carousel dikirim ke vision sebagai satu unit: tiap flyer di-base64 (+33%) lalu
+// json_encode() menyalin seluruh payload jadi satu string lagi. Satu carousel 8
+// gambar sudah menembus 128M default CLI ("Allowed memory size exhausted" di
+// llmPost). Naikkan di sini, bukan di php.ini — job memanggil probe lewat Process.
+ini_set('memory_limit', '512M');
+
 const ROOT     = __DIR__;
 const RAW_DIR  = ROOT . '/storage/raw';
 const EXT_DIR  = ROOT . '/storage/extracted';
 const HASH_FILE = ROOT . '/storage/hashes.json';
 const QUEUE_FILE = ROOT . '/storage/fetch_queue.json';
+// Profil akun (bukan post): {username}.json + {username}.jpg. Bukan di storage/raw
+// karena raw itu tempat singgah per-post dan ikut di-prune tiap import.
+const PROFILE_DIR = ROOT . '/storage/profiles';
 
 // Field yang harus terisi supaya sebuah post dihitung "berhasil dinormalisasi".
 // Yang kosong masuk `_missing` -> `_needs_review` -> antrian review manusia.
@@ -135,6 +144,28 @@ function extractionSchema(): array
         'additionalProperties' => false,
     ]);
 
+    // Satu keberangkatan dari flyer jadwal. Isinya cuma yang bisa berbeda per
+    // baris; sisanya (PPIU, kota, pembimbing, fasilitas) diwarisi dari field
+    // tingkat atas saat import — lihat ImportExtractedPackages::offers().
+    $departure = [
+        'type'       => 'object',
+        'properties' => [
+            'departure_date' => nullable(['type' => 'string']),
+            'date_certainty' => ['type' => 'string', 'enum' => ['exact', 'month', 'season', 'unknown']],
+            'duration_days'  => nullable(['type' => 'integer']),
+            'price_tiers'    => ['type' => 'array', 'items' => $tier],
+            'airline'        => nullable(['type' => 'string']),
+            'extension'      => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
+            'hotel_makkah'   => $hotel,
+            'hotel_madinah'  => $hotel,
+        ],
+        'required' => [
+            'departure_date', 'date_certainty', 'duration_days', 'price_tiers',
+            'airline', 'extension', 'hotel_makkah', 'hotel_madinah',
+        ],
+        'additionalProperties' => false,
+    ];
+
     $confidence = [
         'type'       => 'object',
         'properties' => [
@@ -165,6 +196,9 @@ function extractionSchema(): array
             'guide_name'     => nullable(['type' => 'string']),
             'extension'      => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
             'price_tiers'    => ['type' => 'array', 'items' => $tier],
+            // Semua keberangkatan yang ditawarkan gambar ini, termasuk yang sudah
+            // ditaruh di field tingkat atas. Satu elemen = satu baris paket.
+            'departures'     => ['type' => 'array', 'items' => $departure],
             'hotel_makkah'   => $hotel,
             'hotel_madinah'  => $hotel,
             'facilities'     => [
@@ -185,8 +219,8 @@ function extractionSchema(): array
         'required' => [
             'post_kind',
             'ppiu_name', 'license_number', 'departure_date', 'date_certainty', 'duration_days',
-            'departure_city', 'airline', 'guide_name', 'extension', 'price_tiers', 'hotel_makkah',
-            'hotel_madinah', 'facilities', 'facilities_raw', 'detail_images', 'confidence',
+            'departure_city', 'airline', 'guide_name', 'extension', 'price_tiers', 'departures',
+            'hotel_makkah', 'hotel_madinah', 'facilities', 'facilities_raw', 'detail_images', 'confidence',
         ],
         'additionalProperties' => false,
     ];
@@ -244,8 +278,32 @@ TANGGAL (`departure_date`) — format ketat, tidak ada bentuk lain yang diterima
 - Hari + bulan tanpa tahun ("14 Maret") -> pakai tahun dari "Tanggal posting" yang
   dilampirkan di bawah caption: ambil kejadian PERTAMA setelah tanggal posting itu.
   Tidak ada tanggal posting -> null.
-- Satu flyer sering memuat beberapa keberangkatan. Ambil yang paling menonjol
-  (judul/paling besar); sisanya diabaikan, bukan digabung.
+- Satu flyer JADWAL memuat BANYAK keberangkatan sekaligus: tabel tanggal, daftar
+  "Edisi Agustus/September/Oktober", atau beberapa program yang masing-masing punya
+  harga sendiri. SEMUANYA dipanen ke `departures`, satu objek per keberangkatan,
+  urut seperti di flyer. Satu baris tabel = satu objek `departures`.
+- Yang paling menonjol (judul/paling besar/paling awal) ditaruh JUGA di field
+  tingkat atas (`departure_date`, `duration_days`, `price_tiers`, dst) dan TETAP
+  ikut sebagai salah satu elemen `departures` — jangan dihilangkan dari daftar.
+- Flyer yang cuma menjual satu keberangkatan -> `departures` berisi satu objek itu.
+- Di dalam `departures`, isi null (atau [] untuk `price_tiers`, `unknown` untuk
+  `extension`) kalau keberangkatan itu tidak punya nilainya sendiri: itu berarti
+  "sama dengan field tingkat atas". Yang dicetak per baris — tanggal, durasi,
+  harga per tanggal, maskapai/hotel per program — WAJIB diisi di objeknya.
+- Satu baris tabel yang menyebut beberapa tanggal sekaligus ("03 & 27 September",
+  "03, 12 & 29 Oktober") = beberapa objek `departures` dengan durasi & harga sama.
+- JANGAN mengarang tanggal untuk melengkapi tabel. Yang masuk `departures` cuma
+  baris yang benar-benar tertulis di flyer atau caption.
+- KEBERANGKATAN YANG SUDAH HABIS TIDAK DIJUAL — jangan dimasukkan ke `departures`
+  sama sekali. Penandanya stempel/label di baris itu: "SOLD OUT", "SOLDOUT",
+  "HABIS", "FULL", "FULLBOOK"/"FULL BOOKED", "CLOSED", "TUTUP", "WAITING LIST",
+  "WL", "EXPIRED", atau harganya dicoret. Stempelnya sering ditempel MIRING di
+  atas satu baris tabel dan cuma mengenai baris itu — baris lain di tabel yang
+  sama tetap dipanen. Baris begitu juga tidak boleh jadi field tingkat atas:
+  yang "paling menonjol" dihitung dari baris yang MASIH dijual, walaupun baris
+  sold out ada di paling atas atau hurufnya paling besar.
+- Semua barisnya sold out -> `departures` [], `departure_date` null,
+  `price_tiers` [], `confidence.price` 0. Jangan dipaksa memilih satu.
 
 HARGA (`price_tiers`) — cuma angka yang benar-benar tertulis sebagai harga paket:
 - "25jt" / "25 juta" = 25000000, "25,9jt" = 25900000, "Rp 25.900.000" = 25900000.
@@ -527,11 +585,18 @@ function cmdFetch(array $argv): void
             usleep((int) ($sleep * 1_000_000));
         }
         $mediaArgs = $after === null ? "media.limit($page)" : "media.after($after).limit($page)";
+        // Profil cuma diminta di halaman pertama: nilainya sama di tiap halaman dan
+        // yang mengikat kuota itu total_time. is_verified & tanggal bergabung tidak
+        // ada di business_discovery (dijawab `#100 nonexisting field`), jangan dicari.
+        $profileFields = $after === null
+            ? 'name,followers_count,follows_count,media_count,profile_picture_url,'
+            : '';
         $url = sprintf(
-            'https://graph.facebook.com/%s/%s?fields=business_discovery.username(%s){%s{%s}}&access_token=%s',
+            'https://graph.facebook.com/%s/%s?fields=business_discovery.username(%s){%s%s{%s}}&access_token=%s',
             $version,
             $creds[$c]['user'],
             $username,
+            $profileFields,
             $mediaArgs,
             $fields,
             urlencode($creds[$c]['token'])
@@ -567,6 +632,10 @@ function cmdFetch(array $argv): void
         if ($bd === null) {
             // Akun personal / bukan Professional -> ga terbaca sama sekali.
             throw new RuntimeException("@$username tidak terbaca. Pastikan akun Professional.");
+        }
+
+        if ($after === null) {
+            saveProfile($username, $bd);
         }
 
         $items = $bd['media']['data'] ?? [];
@@ -638,6 +707,71 @@ function usernameOf(string $line): ?string
  * dilewat. Sengaja sekuensial: rate limit Graph API itu tingkat app, semua
  * request numpuk di satu token, jadi paralel cuma bikin kena #4 lebih cepat.
  */
+/**
+ * Profil saja, tanpa media: `business_discovery` tanpa ekspansi `media{children{}}`.
+ * Itu bagian yang mahal — yang mengikat kuota `total_time`, bukan jumlah request —
+ * jadi mengisi profil 200 akun jauh lebih murah daripada men-scrap ulang semuanya.
+ *
+ * Tidak menyentuh storage/raw dan tidak mengubah apa pun soal post: cuma menulis
+ * storage/profiles/{username}.json + .jpg, sama seperti halaman pertama `fetch`.
+ */
+function cmdProfile(array $argv): void
+{
+    $usernames = array_values(array_filter(
+        array_slice($argv, 2),
+        fn (string $arg) => !str_starts_with($arg, '--'),
+    ));
+    if ($usernames === []) {
+        out('Usage: php probe.php profile <username> [username…] [--sleep=3]');
+        exit(1);
+    }
+
+    $creds   = igCreds();
+    $version = env('IG_GRAPH_VERSION', 'v25.0');
+    $sleep   = (float) (optval($argv, 'sleep') ?? env('IG_FETCH_SLEEP', '3'));
+    $fields  = 'name,followers_count,follows_count,media_count,profile_picture_url';
+
+    $ok = 0;
+    foreach ($usernames as $i => $username) {
+        if ($sleep > 0 && $i > 0) {
+            usleep((int) ($sleep * 1_000_000));
+        }
+
+        // Limitnya per app: kalau kena, coba app berikutnya untuk akun yang sama.
+        $c = crc32($username) % count($creds);
+        for ($try = 0; $try < count($creds); $try++, $c = ($c + 1) % count($creds)) {
+            try {
+                $res = graphGet(sprintf(
+                    'https://graph.facebook.com/%s/%s?fields=business_discovery.username(%s){%s}&access_token=%s',
+                    $version,
+                    $creds[$c]['user'],
+                    $username,
+                    $fields,
+                    urlencode($creds[$c]['token']),
+                ));
+            } catch (RuntimeException $e) {
+                if ($try + 1 < count($creds) && str_contains($e->getMessage(), 'rate limit')) {
+                    continue;
+                }
+                // Satu akun mati (username salah / bukan Professional) tidak boleh
+                // menghentikan sisa daftarnya — 196 akun, satu proses.
+                out('  gagal @' . $username . ': ' . strtok($e->getMessage(), "\n"));
+                break;
+            }
+
+            if (($bd = $res['business_discovery'] ?? null) === null) {
+                out("  gagal @$username: tidak terbaca, pastikan akun Professional");
+                break;
+            }
+            saveProfile($username, $bd);
+            $ok++;
+            break;
+        }
+    }
+
+    out(sprintf('profil: %d/%d akun tersimpan di storage/profiles/', $ok, count($usernames)));
+}
+
 function cmdFetchAll(array $argv): void
 {
     $limit = (int) (optval($argv, 'limit') ?? 50);
@@ -752,6 +886,41 @@ function imageUrlsOf(array $post): array
 }
 
 /** media_url = signed CDN URL yang expire. Download sekarang, jangan simpan URL-nya. */
+/**
+ * Profil akun -> storage/profiles/{username}.json (+ .jpg).
+ *
+ * Foto profilnya di-download, bukan disimpan URL-nya: `profile_picture_url` itu
+ * signed CDN scontent yang mati dalam hitungan hari — aturan yang sama dengan
+ * `media_url`. Ukurannya belasan KB per akun, sekali per scrap.
+ */
+function saveProfile(string $username, array $bd): void
+{
+    @mkdir(PROFILE_DIR, 0775, true);
+
+    $profile = [
+        'username'        => $username,
+        'full_name'       => $bd['name'] ?? null,
+        'followers_count' => $bd['followers_count'] ?? null,
+        'follows_count'   => $bd['follows_count'] ?? null,
+        'media_count'     => $bd['media_count'] ?? null,
+        'fetched_at'      => date('c'),
+    ];
+    file_put_contents(PROFILE_DIR . "/$username.json", json_encode($profile, JSON_PRETTY_PRINT));
+
+    out(sprintf(
+        '  profil @%s: %s pengikut, %s diikuti, %s post di IG',
+        $username,
+        $profile['followers_count'] ?? '?',
+        $profile['follows_count'] ?? '?',
+        $profile['media_count'] ?? '?',
+    ));
+
+    if (($url = $bd['profile_picture_url'] ?? null) && ($bytes = @file_get_contents($url)) !== false) {
+        file_put_contents(PROFILE_DIR . "/$username.jpg", $bytes);
+        out(sprintf('    GET foto profil -> storage/profiles/%s.jpg (%.1f KB)', $username, strlen($bytes) / 1024));
+    }
+}
+
 function savePost(string $username, array $post): void
 {
     $dir = RAW_DIR . "/$username/" . $post['id'];
@@ -940,6 +1109,9 @@ function cmdExtract(array $argv): void
     // --only=<media_id>: ekstrak ulang satu post saja, buat ngetes perubahan prompt.
     $only   = optval($argv, 'only');
     $force  = $force || $only !== null;
+    // --no-gate: gerbang vision dilewati. Buat tombol "baca ulang AI" di halaman post —
+    // operator sudah melihat flyernya sendiri dan menilai vonis vision salah.
+    $noGate = in_array('--no-gate', $argv, true);
     $models = envList(env('EXTRACT_MODEL'), 'ds/deepseek-v4-flash');
 
     @mkdir(EXT_DIR, 0775, true);
@@ -991,6 +1163,25 @@ function cmdExtract(array $argv): void
             strlen($caption),
         ));
 
+        // Pass 0 — pra-gerbang caption. Satu call teks (murah) buat menyaring post yang
+        // captionnya SENDIRI sudah mengaku bukan penawaran: dokumentasi keberangkatan,
+        // manasik, ucapan hari besar. Vision (gambar base64, model termahal di pipeline)
+        // tidak pernah dipanggil untuk post begitu. Sengaja asimetris — cuma boleh
+        // menolak, tidak pernah meloloskan: caption travel sering cuma "chat admin"
+        // padahal flyernya paket beneran, jadi ragu = lanjut ke vision.
+        if (!$noGate && $images !== [] && strlen($caption) >= CAPTION_GATE_MIN) {
+            $kind = readCaption($models, $caption);
+            if ($kind !== null) {
+                out("  caption: $kind — vision dilewat");
+                $data = ['post_kind' => $kind, '_rejected_by' => 'caption'];
+                writeExtraction(EXT_DIR . '/' . $post['id'] . '.json', $data, $post, '', null);
+                $ditolak++;
+                $done++;
+
+                continue;
+            }
+        }
+
         // Pass 1 — gerbang. Vision melihat flyer, menyalin teksnya per gambar, dan
         // memutuskan ini penawaran paket atau bukan. Dijalankan lebih dulu (bukan cuma
         // kalau field kosong) supaya mayoritas post yang bukan paket berhenti di sini
@@ -1007,7 +1198,20 @@ function cmdExtract(array $argv): void
             ));
         }
 
-        if ($verdict !== null && $verdict['post_kind'] !== 'package_offer') {
+        // Balasan vision yang tidak terbaca (JSON rusak/terpotong, `slides` kosong,
+        // entri tanpa `n`) BUKAN vonis. jsonOf() balik [] diam-diam, dan tanpa
+        // saringan ini visionVerdict([]) membacanya jadi post_kind=other -> import
+        // mengecualikan postnya selamanya + rawnya dihapus, padahal modelnya cuma
+        // gagal menjawab. Terukur 2026-07-31: 46 dari ~200 ekstraksi kena begini.
+        // Tidak ditulis apa-apa, jadi post-nya tetap di raw dan extract berikutnya
+        // mencobanya lagi — gratis, karena gerbangnya belum sempat memutuskan.
+        if ($verdict !== null && $verdict['slides'] === []) {
+            out('  vision: balasan tidak terbaca (0 slide) — tidak divonis, dicoba lagi nanti');
+
+            continue;
+        }
+
+        if (!$noGate && $verdict !== null && $verdict['post_kind'] !== 'package_offer') {
             // Ditolak di gerbang: simpan alasan + transkripnya saja. Penyusun tidak
             // dipanggil, dan `packages:import --prune` yang mengecualikan + memindahkannya.
             $data = ['post_kind' => $verdict['post_kind'], '_rejected_by' => 'vision'];
@@ -1029,6 +1233,19 @@ function cmdExtract(array $argv): void
         // Post tanpa gambar (jalur seed) lewat tanpa gerbang: caption saja.
         if ($verdict === null) {
             $offers = [['n' => 0, 'text' => '', 'is_offer' => true]];
+        }
+
+        // --no-gate dan tidak ada satu pun gambar yang dinilai penawaran: transkrip
+        // semua gambar digabung jadi SATU penyusunan bareng caption, bukan satu baris
+        // per gambar. Slide promo biasanya memuat potongan info yang sama — dipecah
+        // per gambar hasilnya beberapa baris kembar dari satu paket.
+        if ($offers === [] && $noGate && $verdict !== null) {
+            $offers = [[
+                'n' => 1,
+                'text' => trim(implode("\n", array_column($verdict['slides'], 'text'))),
+                'is_offer' => true,
+            ]];
+            out('  gerbang dilewati (--no-gate): transkrip ' . count($verdict['slides']) . ' gambar + caption -> 1 penyusunan');
         }
 
         foreach ($offers as $offer) {
@@ -1053,9 +1270,12 @@ function cmdExtract(array $argv): void
             );
             $done++;
 
-            out(sprintf('  %-24s %s', $label, $data['_missing'] === []
+            out(sprintf('  %-24s %s%s', $label, $data['_missing'] === []
                 ? 'OK'
-                : 'kurang: ' . implode(',', $data['_missing'])));
+                : 'kurang: ' . implode(',', $data['_missing']),
+                count($data['departures'] ?? []) > 1
+                    ? ' · ' . count($data['departures']) . ' keberangkatan'
+                    : ''));
         }
     }
 
@@ -1153,6 +1373,96 @@ function writeExtraction(string $target, array $data, array $post, string $flyer
     return $data;
 }
 
+/**
+ * Caption sependek ini tidak pernah memuat bukti yang cukup untuk menolak — "Info
+ * lengkap chat admin 🕋" itu caption paket maupun caption dakwah. Langsung ke vision.
+ *
+ * ponytail: satu angka, bukan env. Turunkan kalau mau hemat lebih agresif; naikkan
+ * kalau ada flyer paket yang kejaring pra-gerbang.
+ */
+const CAPTION_GATE_MIN = 200;
+
+const CAPTION_GATE_PROMPT = <<<'TXT'
+Kamu penjaga gerbang MURAH sebelum flyernya dilihat model vision. Kamu HANYA
+melihat caption — gambarnya tidak dikirim ke kamu, dan kamu tidak boleh menebak
+isinya.
+
+Tugasmu satu: apakah caption ini SENDIRI sudah membuktikan postingannya BUKAN
+penawaran paket umroh?
+
+Default jawabanmu `lanjut`. Menolak itu pengecualian, bukan kebiasaan: travel
+sering memposting flyer paket lengkap dengan caption yang cuma emoji, doa, atau
+"info lengkap chat admin" — harga dan tanggalnya ada di gambar, dan gambar itu
+tidak kamu lihat. Caption yang tidak memuat detail paket BUKAN alasan menolak.
+
+Tolak HANYA kalau captionnya bercerita tentang hal lain, jelas, dengan kata-katanya
+sendiri:
+- `testimonial`   — dokumentasi/laporan jamaah yang SUDAH berangkat, pelepasan,
+                    penyambutan kepulangan, ucapan terima kasih, foto suasana.
+- `education`     — manasik, kajian, tips, doa, dakwah, sejarah, tanya-jawab fiqih.
+- `hotel_info`    — mengenalkan hotel atau jaraknya ke Haram, tanpa menjual paket.
+- `other`         — ucapan hari besar, lowongan kerja, rekrutmen agen, giveaway,
+                    pengumuman kantor/libur, promosi produk non-umroh.
+
+Kalau captionnya menyebut harga, tanggal keberangkatan, durasi hari, kuota, atau
+mengajak mendaftar paket tertentu — SELALU `lanjut`, walau juga berisi doa dan
+hashtag. Ragu sedikit pun = `lanjut`.
+
+Balas HANYA satu objek JSON:
+{"keputusan":"lanjut"}   atau   {"keputusan":"tolak","post_kind":"testimonial"}
+TXT;
+
+/**
+ * Balasan pra-gerbang -> null (lanjut ke vision) atau kategori penolakan.
+ *
+ * Fail-open di semua cabang: JSON rusak, kategori asing, `tolak` tanpa post_kind —
+ * semuanya jadi null. Ini gerbang penghemat, bukan hakim; yang melihat pixel tetap
+ * vision, dan penolakan di sini menghapus raw postnya selamanya lewat import.
+ */
+function captionGate(array $out): ?string
+{
+    if (($out['keputusan'] ?? '') !== 'tolak') {
+        return null;
+    }
+    $kind = (string) ($out['post_kind'] ?? '');
+
+    // `package_offer` dan `promo_generic` sengaja tidak ada di daftar: yang pertama
+    // bukan penolakan, yang kedua vonis "detailnya kurang" yang cuma sah kalau
+    // flyernya sudah dilihat.
+    return in_array($kind, ['testimonial', 'education', 'hotel_info', 'other'], true)
+        ? $kind
+        : null;
+}
+
+/** @param string[] $models penyusun teks — pra-gerbang tidak pernah menerima gambar. */
+function readCaption(array $models, string $caption): ?string
+{
+    out(sprintf(
+        '  POST %s model=%s (caption %d char) -> pra-gerbang',
+        parse_url(routerUrl(), PHP_URL_HOST),
+        implode('|', $models),
+        strlen($caption),
+    ));
+
+    try {
+        $teks = llmPostAny($models, [
+            'messages' => [
+                ['role' => 'user', 'content' => "Caption postingannya:\n\n$caption"],
+                ['role' => 'user', 'content' => CAPTION_GATE_PROMPT],
+            ],
+            'response_format' => ['type' => 'json_object'],
+        ]);
+    } catch (RuntimeException $e) {
+        // Semua model mati: pra-gerbang ini opsional, jangan menahan post yang
+        // sebenarnya bisa dibaca vision.
+        out('  pra-gerbang gagal (' . $e->getMessage() . ') — lanjut ke vision');
+
+        return null;
+    }
+
+    return captionGate(jsonOf($teks));
+}
+
 const TRANSCRIBE_PROMPT = <<<'TXT'
 Kamu punya dua tugas atas gambar-gambar ini: MENYALIN teksnya, lalu MEMUTUSKAN
 apakah ini penawaran paket umroh.
@@ -1172,6 +1482,13 @@ BEBERAPA paket yang berbeda — gambar 1 keberangkatan Ramadhan, gambar 2 Syawal
 dan seterusnya. Masing-masing harus utuh sendiri.
 
 JANGAN menyimpulkan, menghitung, membetulkan, atau menerjemahkan apa pun.
+
+Stempel status ikut disalin PERSIS DI BARIS YANG DIKENAINYA: "SOLD OUT", "HABIS",
+"FULL", "FULLBOOK", "CLOSED", "WAITING LIST", "EXPIRED", harga yang dicoret.
+Stempel begini biasanya ditempel miring/menumpang di atas satu baris tabel — tulis
+di baris itu juga (mis. "4 AGT Fantastic *5 ... Rp 29.999jt [SOLD OUT]"), jangan
+dikumpulkan di akhir teks dan jangan dibuang cuma karena bukan bagian tabelnya.
+Harga yang dicoret tulis "[CORET]" di sebelahnya.
 
 Caption postingannya ikut dilampirkan sebagai KONTEKS: pakai untuk membaca yang
 buram atau disingkat di gambar (nama hotel lengkap, kota keberangkatan, mata uang).
@@ -1410,7 +1727,7 @@ function llmPost(string $url, string $key, array $payload): string
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 180,
+            CURLOPT_TIMEOUT        => (int) (env('AI_TIMEOUT') ?: 60),
             CURLOPT_POST           => true,
             // Router suka memutus stream h2 di tengah balasan panjang
             // ("INTERNAL_ERROR (err 2)"). HTTP/1.1 tidak punya multiplexing yang
@@ -1419,18 +1736,28 @@ function llmPost(string $url, string $key, array $payload): string
             CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Authorization: Bearer ' . $key],
             CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
         ]);
-        $body = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err  = curl_error($ch);
+        $body  = curl_exec($ch);
+        $code  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err   = curl_error($ch);
+        $errno = curl_errno($ch);
         curl_close($ch);
 
         // Timeout/koneksi putus di tengah batch panjang: coba lagi, jangan buang 100 post sebelumnya.
-        // Jeda naik 1/2/4s — ulang seketika biasanya kena kondisi yang sama.
+        //
+        // Timeout diulang SEKETIKA: router memilih API key per request, jadi POST baru
+        // dapat key baru — menunggu cuma memakan jatah job. Galat koneksi lain (DNS,
+        // connection refused) dijeda 1s. Maksimal dua percobaan di sini, sisanya
+        // urusan llmPostAny(): pindah model = pindah provider, jauh lebih mungkin
+        // berhasil daripada mengetuk pintu yang sama untuk ketiga kalinya.
+        //
+        // Anggarannya mengikat: ExtractPost punya $timeout detik untuk satu post
+        // (1 vision + N penyusun). AI_TIMEOUT x 2 percobaan x jumlah model harus muat
+        // di situ — dulu 180s x 4 percobaan sendirian sudah melewatinya.
         if ($body === false) {
-            if ($try < 3) {
-                $jeda = 1 << $try;
-                out("    $err — ulangi dalam {$jeda}s");
-                sleep($jeda);
+            if ($try < 1) {
+                $jeda = $errno === CURLE_OPERATION_TIMEDOUT ? 0 : 1;
+                out("    $err — ulangi " . ($jeda ? "dalam {$jeda}s" : 'seketika (key baru)'));
+                $jeda && sleep($jeda);
                 continue;
             }
             throw new RuntimeException("curl gagal: $err");
@@ -1438,7 +1765,15 @@ function llmPost(string $url, string $key, array $payload): string
         if ($code === 429 && $try < 5) {
             preg_match('/retry in ([\d.]+)/i', $body, $m);
             $wait = (int) ceil((float) ($m[1] ?? 30)) + 1;
-            out("    429 rate limit, tunggu {$wait}s...");
+            // Model + alasan wajib ikut: baris POST mencetak seluruh daftar kandidat,
+            // dan baris "<- HTTP" yang menyebut pemenangnya dilewat saat 429 — jadi
+            // tanpa ini tidak ketahuan slot bayar atau slot gratis yang kena kuota.
+            out(sprintf(
+                '    429 %s: %s — tunggu %ds...',
+                $payload['model'] ?? '?',
+                substr(preg_replace('/\s+/', ' ', strip_tags((string) $body)), 0, 200),
+                $wait,
+            ));
             sleep($wait);
             continue;
         }
@@ -1538,6 +1873,14 @@ function cmdSelftest(): void
     // Angka 0 jangan dianggap kosong (duration_days 0 itu data salah, tapi bukan "hilang").
     assert(!in_array('duration_days', missingFields(['duration_days' => 0] + $full), true));
 
+    // Pra-gerbang caption: fail-open di semua cabang yang tidak tegas menolak.
+    assert(captionGate(['keputusan' => 'tolak', 'post_kind' => 'testimonial']) === 'testimonial');
+    assert(captionGate(['keputusan' => 'lanjut']) === null, 'lanjut = vision tetap jalan');
+    assert(captionGate([]) === null, 'balasan rusak bukan vonis');
+    assert(captionGate(['keputusan' => 'tolak']) === null, 'tolak tanpa kategori = lanjut');
+    assert(captionGate(['keputusan' => 'tolak', 'post_kind' => 'promo_generic']) === null,
+        'promo_generic cuma sah kalau flyernya sudah dilihat');
+
     // x-app-usage yang absen jangan menimpa angka terakhir dengan sampah.
     lastAppUsage(['total_time' => 42]);
     assert(lastAppUsage() === ['total_time' => 42]);
@@ -1607,6 +1950,12 @@ function cmdSelftest(): void
             "$penanda kosong harus ditolak walau dilabeli package_offer");
     }
     assert(visionVerdict([])['post_kind'] === 'other', 'balasan rusak jangan jadi paket');
+    // ...tapi juga jangan jadi vonis: `slides` kosong itu tanda balasannya tidak
+    // terbaca, dan cmdExtract() memakainya untuk melewati post tanpa menulis apa pun
+    // (kalau ditulis, import mengecualikan postnya selamanya + rawnya dihapus).
+    assert(visionVerdict([])['slides'] === [], 'balasan rusak wajib 0 slide, itu penanda "belum divonis"');
+    assert(visionVerdict(['slides' => [['has_price' => true]]])['slides'] === [],
+        'slide tanpa nomor gambar tidak bisa dipetakan ke file — sama dengan balasan rusak');
     assert(visionVerdict(['post_kind' => 'education'])['post_kind'] === 'education', 'label non-paket dibiarkan');
 
     // Carousel: tiap gambar penawaran berdiri sendiri, gambar dakwah tidak ikut.
@@ -1680,6 +2029,7 @@ try {
         'auth'     => cmdAuth($argv),
         'fetch'    => cmdFetch($argv),
         'fetchall' => cmdFetchAll($argv),
+        'profile'  => cmdProfile($argv),
         'quota'    => cmdQuota($argv),
         'seed'     => cmdSeed($argv),
         'extract'  => cmdExtract($argv),
@@ -1688,6 +2038,7 @@ try {
             "php probe.php auth <short_lived_user_token>\n" .
             "php probe.php fetch <username> [--limit=50]\n" .
             "php probe.php fetchall [accounts.txt] [--limit=50] [--sleep=3] [--retry]\n" .
+            "php probe.php profile <username> [username…] [--sleep=3]\n" .
             "php probe.php quota\n" .
             "php probe.php seed <dir>\n" .
             "php probe.php extract [--limit=200] [--force]\n" .

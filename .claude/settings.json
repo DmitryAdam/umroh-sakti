@@ -7,7 +7,10 @@
       "Bash(curl -sk -m 60 https://9router.jinno.my.id/v1/chat/completions -H \"Authorization: Bearer sk-d9dc0e3850099303-97e0c3-85afdce9\" -H \"Content-Type: application/json\" -d '{\"model\":\"gemini/gemini-3.1-flash-lite-preview\",\"messages\":[{\"role\":\"user\",\"content\":\"balas JSON {\\\\\"ok\\\\\":true} saja\"}],\"response_format\":{\"type\":\"json_object\"}}')",
       "Bash(php probe.php fetch ledimarina --limit=3)",
       "Bash(php -l probe.php)",
-      "Bash(php -d zend.assertions=1 probe.php selftest)"
+      "Bash(php -d zend.assertions=1 probe.php selftest)",
+      "Bash(sqlite3 database/database.sqlite \"select id, media_id, flyer_index, departure_date, departure_city, hotel_makkah, hotel_madinah, airline, dedup_key, source_account from packages where id in \\(84,85,347\\);\")",
+      "Bash(sqlite3 database/database.sqlite \"select queue, count\\(*\\), sum\\(reserved_at is not null\\) from jobs group by queue;\")",
+      "Bash(sqlite3 database/database.sqlite \"select count\\(*\\) from cache_locks;\")"
     ],
     "additionalDirectories": [
       "/Users/masmit5d/Documents/source-code/umroh-sakti/app/Console/Commands"

@@ -47,6 +47,28 @@ return [
             'report' => false,
         ],
 
+        /*
+         * Flyer paket yang sudah lolos import. storage/raw itu tempat singgah:
+         * isinya semua gambar yang di-download dari IG, termasuk yang ternyata
+         * bukan penawaran. Yang naik ke sini cuma gambar yang benar-benar jadi
+         * baris paket (Package::promoteFlyer), dan raw-nya langsung dihapus.
+         *
+         * Lokal saat dev; di produksi cukup FLYER_DISK=s3 — kunci bucketnya
+         * dibaca dari AWS_* yang sama dengan disk 's3' di bawah.
+         */
+        'flyers' => [
+            'driver' => env('FLYER_DISK', 'local'),
+            'root' => storage_path('flyers'),
+            'key' => env('AWS_ACCESS_KEY_ID'),
+            'secret' => env('AWS_SECRET_ACCESS_KEY'),
+            'region' => env('AWS_DEFAULT_REGION'),
+            'bucket' => env('AWS_BUCKET'),
+            'endpoint' => env('AWS_ENDPOINT'),
+            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'throw' => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),

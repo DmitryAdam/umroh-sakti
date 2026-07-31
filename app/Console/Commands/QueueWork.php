@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Support\PipelineLog;
 use Illuminate\Contracts\Process\InvokedProcess;
 use Illuminate\Queue\Console\WorkCommand;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Symfony\Component\Console\Input\InputOption;
 
@@ -71,6 +72,22 @@ class QueueWork extends WorkCommand
             return self::FAILURE;
         }
 
+        // Worker yang di-kill di tengah job meninggalkan `reserved_at` terisi. Job itu
+        // baru diklaim ulang setelah DB_QUEUE_RETRY_AFTER lewat (1200 detik) — jadi
+        // sesudah restart antrian kelihatan "3 jalan" selama 20 menit padahal tidak ada
+        // proses yang mengerjakannya. Jangan turunkan retry_after-nya: itu jaring untuk
+        // job yang memang lama (satu carousel ke vision + penyusun), dan menurunkannya
+        // bikin job yang masih jalan diambil worker kedua.
+        //
+        // Guard pgrep di atas sudah memastikan tidak ada worker lain yang hidup, jadi
+        // setiap reservasi yang tersisa di sini pasti yatim. `cache_locks` sengaja tidak
+        // disentuh: lock `unique` kedaluwarsa sendiri dalam 120 detik, dan menghapusnya
+        // lebih awal justru membuka dispatch dobel untuk job yang masih antri.
+        $yatim = DB::table('jobs')->whereNotNull('reserved_at')->update(['reserved_at' => null]);
+        if ($yatim > 0) {
+            PipelineLog::write('run', "$yatim job reservasi yatim dilepas");
+        }
+
         $ai = max(1, (int) $this->option('ai'));
         $workers = ['ig' => 1, 'ai' => $ai, 'db' => 1];
 
@@ -124,7 +141,14 @@ class QueueWork extends WorkCommand
                     continue;
                 }
 
-                PipelineLog::write('run', "worker $nama keluar, nyalakan lagi");
+                // Kode keluarnya ikut dicatat: worker Laravel keluar diam-diam untuk
+                // beberapa sebab yang beda penanganannya (12 = --memory habis,
+                // 1 = exception, 0 = --max-time). Tanpa ini restart yang tiap 5 menit
+                // tidak bisa dibedakan dari restart sejam sekali yang memang disengaja.
+                // wait() di sini TIDAK memblokir: prosesnya sudah keluar (running()
+                // barusan false), jadi ini cuma cara mengambil ProcessResult-nya —
+                // InvokedProcess sendiri tidak punya exitCode().
+                PipelineLog::write('run', "worker $nama keluar (exit {$proses->wait()->exitCode()}), nyalakan lagi");
                 $jalan[$nama] = $this->spawn($nama, $anak[$nama], $berhenti);
             }
 

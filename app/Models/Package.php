@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Satu paket = satu baris, dan semua komponennya ikut di baris ini: hotel,
@@ -14,11 +15,25 @@ class Package extends Model
 {
     protected $guarded = [];
 
+    /** Disk flyer paket (config/filesystems.php) — local saat dev, s3 di produksi. */
+    public const FLYER_DISK = 'flyers';
+
     /** Tier harga tetap: satu paket satu baris, tanpa tabel tier. */
     public const PRICE_COLUMNS = ['price_quad', 'price_triple', 'price_double', 'price_single'];
 
     public const FACILITY_CODES = ['visa', 'tiket', 'hotel', 'makan_3x', 'muthawif',
         'perlengkapan', 'handling', 'city_tour', 'asuransi'];
+
+    /**
+     * Status publikasi. Cuma `published` yang tampil ke pengunjung; `draft` dan
+     * `review` beda asalnya saja (ImportExtractedPackages: `_needs_review` →
+     * review), dua-duanya sama-sama belum publik.
+     *
+     * Tidak ada `rejected` walau migrasinya menyebutnya: paket yang ditolak
+     * dihapus barisnya (tombol ×) sekalian mengecualikan postnya, jadi status
+     * "ditolak" tidak pernah punya baris untuk ditempeli.
+     */
+    public const STATUSES = ['draft', 'review', 'published'];
 
     /** Koreksi manusia atas hasil ekstraksi — bahan perbaikan prompt, bukan status publikasi. */
     public const REVIEW_VERDICTS = [
@@ -167,6 +182,20 @@ class Package extends Model
     }
 
     /**
+     * Caption post asalnya, dibaca dari `storage/raw/{akun}/{media_id}/post.json`.
+     * Tidak disalin ke kolom: caption yang sama dipakai bersama semua slide satu
+     * carousel, dan post.json memang sengaja ditinggal di raw (itu yang bikin fetch
+     * berikutnya melewati post ini). Null kalau rawnya sudah kebuang.
+     */
+    public function caption(): ?string
+    {
+        $file = storage_path("raw/{$this->source_account}/{$this->media_id}/post.json");
+        $post = is_file($file) ? json_decode((string) File::get($file), true) : null;
+
+        return trim($post['caption'] ?? '') ?: null;
+    }
+
+    /**
      * Semua post yang memuat paket ini: post asal ekstraksi dulu, lalu repostnya.
      *
      * @return array<int, array{media_id: ?string, account: ?string, permalink: ?string}>
@@ -184,21 +213,86 @@ class Package extends Model
     }
 
     /**
-     * Thumbnail flyer post asal, urut sesuai carousel aslinya. Yang keluar selalu
-     * versi kecil — flyer full tidak pernah di-re-host, lihat FlyerThumbController.
+     * Letak flyer paket ini di disk `flyers`: satu paket = satu gambar, jadi
+     * kuncinya `{media_id}/{flyer_index}.jpg`. Null untuk baris lama yang
+     * flyer_index-nya belum ada — itu masih dilayani dari storage/raw.
+     */
+    public function flyerPath(): ?string
+    {
+        return $this->flyer_index === null ? null : "{$this->media_id}/{$this->flyer_index}.jpg";
+    }
+
+    /**
+     * Pindahkan flyer dari tempat singgah (storage/raw) ke disk `flyers`.
+     * Dipanggil sekali, tepat setelah barisnya dibuat — jadi yang menetap cuma
+     * gambar yang sudah divonis penawaran paket oleh pipeline; sisa isi carousel
+     * (foto suasana, slide dakwah) tetap di raw dan ikut kebuang saat prune.
      *
-     * Di carousel biasanya cuma satu-dua gambar yang memuat detail paket, sisanya
-     * foto suasana. probe.php sudah menandainya lewat `_useful_images`; kalau
-     * tandanya belum ada (hasil ekstraksi lama), pajang semua.
+     * Raw-nya dihapus setelah tersalin: kalau tidak, "pindah ke s3" cuma jadi
+     * penggandaan byte. post.json sengaja ditinggal — itu yang bikin fetch
+     * berikutnya melewati post ini.
+     */
+    public function promoteFlyer(): bool
+    {
+        $path = $this->flyerPath();
+        $raw = storage_path("raw/{$this->source_account}/{$this->media_id}/{$this->flyer_index}.jpg");
+
+        if ($path === null || ! is_file($raw)) {
+            return false;
+        }
+
+        Storage::disk(self::FLYER_DISK)->put($path, File::get($raw));
+        File::delete($raw);
+
+        return true;
+    }
+
+    /**
+     * Kebalikan promoteFlyer: kembalikan flyer ke storage/raw supaya `probe.php
+     * extract` bisa membacanya lagi (tombol "baca ulang"). Yang dibaca extract
+     * cuma raw — flyer yang sudah dipindah ke disk `flyers` tidak kelihatan dari
+     * sana, dan tanpa ini vision cuma dikirimi sisa gambar carousel.
+     *
+     * File raw yang masih ada tidak ditimpa; import berikutnya yang memindahkannya
+     * lagi (dan menghapus raw-nya) lewat promoteFlyer.
+     */
+    public function restoreFlyer(): bool
+    {
+        $path = $this->flyerPath();
+        $raw = storage_path("raw/{$this->source_account}/{$this->media_id}/{$this->flyer_index}.jpg");
+
+        if ($path === null || is_file($raw) || ! Storage::disk(self::FLYER_DISK)->exists($path)) {
+            return false;
+        }
+
+        File::ensureDirectoryExists(dirname($raw));
+        File::put($raw, Storage::disk(self::FLYER_DISK)->get($path));
+
+        return true;
+    }
+
+    /**
+     * Thumbnail flyer paket ini. Yang keluar selalu versi kecil — flyer full
+     * tidak pernah di-re-host, lihat FlyerThumbController.
+     *
+     * Satu paket satu gambar (`flyer_index`), jadi tidak ada glob dan tidak ada
+     * cek keberadaan file: di s3 cek itu satu HEAD request per kartu. Kalau
+     * gambarnya benar-benar hilang, controllernya yang balas 404.
+     *
+     * Baris lama tanpa `flyer_index` jatuh ke jalur raw yang lama: glob folder
+     * post, disaring `_useful_images`.
      *
      * ponytail: cuma flyer post asal — repost tidak dipajang karena flyernya
-     * gambar yang itu-itu juga (rebranding). Kalau raw post asal sudah dibuang,
-     * kartunya tampil tanpa gambar.
+     * gambar yang itu-itu juga (rebranding).
      *
      * @return array<int, string>
      */
     public function flyers(): array
     {
+        if ($this->flyer_index !== null) {
+            return [route('flyer', ['media' => $this->media_id, 'index' => $this->flyer_index])];
+        }
+
         $files = glob(storage_path("raw/{$this->source_account}/{$this->media_id}/*.jpg")) ?: [];
         sort($files, SORT_NATURAL);
 
@@ -222,6 +316,10 @@ class Package extends Model
      */
     public function deleteSources(): void
     {
+        if ($path = $this->flyerPath()) {
+            Storage::disk(self::FLYER_DISK)->delete($path);
+        }
+
         foreach ($this->posts() as $post) {
             if (! $post['media_id']) {
                 continue;

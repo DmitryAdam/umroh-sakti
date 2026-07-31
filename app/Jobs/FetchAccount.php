@@ -10,6 +10,7 @@ use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
 use Throwable;
 
 /**
@@ -59,17 +60,35 @@ class FetchAccount implements ShouldQueue
 
     public function handle(): void
     {
+        // Diblokir setelah job ini masuk antrian — batalkan di sini, bukan cuma di
+        // pemanggilnya: crawl, tombol per-akun, dan retry semuanya lewat sini.
+        if ($this->account->isBlocked()) {
+            PipelineLog::write('ig', "== lewati @{$this->account->username}: ada di blocklist");
+
+            return;
+        }
+
         PipelineLog::write('ig', "== fetch @{$this->account->username} (limit {$this->limit})");
 
         // stdout probe.php diteruskan apa adanya: request ke graph.facebook.com,
         // tiap gambar yang di-download, dan post yang dilewat karena sudah dikecualikan.
-        $result = Process::timeout($this->timeout)->run([
-            PHP_BINARY,
-            base_path('probe.php'),
-            'fetch',
-            $this->account->username,
-            "--limit={$this->limit}",
-        ], PipelineLog::stream('ig'));
+        try {
+            $result = Process::timeout($this->timeout)->run([
+                PHP_BINARY,
+                base_path('probe.php'),
+                'fetch',
+                $this->account->username,
+                "--limit={$this->limit}",
+            ], PipelineLog::stream('ig'));
+        } catch (ProcessSignaledException $e) {
+            // Ctrl+C / pkill kena satu grup proses — probe.php ikut mati, bukan fetchnya
+            // yang salah. Jangan lewat fail(): itu menulis `last_error` dan akunnya
+            // kelihatan gagal di /akun padahal cuma workernya dihentikan.
+            PipelineLog::write('ig', "@{$this->account->username}: dihentikan (signal {$e->getSignal()}), antri lagi");
+            $this->release();
+
+            return;
+        }
 
         if ($result->failed()) {
             $error = trim($result->errorOutput() ?: $result->output());
@@ -96,7 +115,10 @@ class FetchAccount implements ShouldQueue
             return;
         }
 
-        $this->account->update(['last_fetched_at' => now(), 'last_error' => null]);
+        $this->account->update([
+            'last_fetched_at' => now(),
+            'last_error' => null,
+        ] + $this->account->profileFromDisk());
 
         ExtractPending::dispatch();
     }

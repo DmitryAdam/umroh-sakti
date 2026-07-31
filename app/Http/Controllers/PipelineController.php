@@ -2,47 +2,81 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ExtractPending;
 use App\Models\Package;
 use App\Models\SourceAccount;
 use App\Support\PipelineLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
- * Tombol + progress pipeline, biar tidak perlu bolak-balik ke terminal.
- * Tetap lewat queue: tombolnya cuma melempar job, worker (`php artisan queue:work`)
- * yang mengerjakan. Dikunci ke env local — ini alat kerja, bukan fitur publik.
+ * Progress pipeline + tombol batal, biar tidak perlu bolak-balik ke terminal.
+ * Tidak ada tombol "jalankan": job diantrikan dari halaman akun (`scrap`) atau
+ * `packages:crawl`, dan `php artisan queue:work` yang mengerjakan semuanya.
+ * Dikunci ke env local — ini alat kerja, bukan fitur publik.
  */
 class PipelineController extends Controller
 {
-    public function start(): JsonResponse
+    /** Antrian yang dikenal — sama dengan yang di-spawn `QueueWork`. */
+    public const QUEUES = ['ig', 'ai', 'db'];
+
+    /**
+     * Buang isi antrian + daftar gagal. Tanpa `$queue` semuanya; dengan `$queue`
+     * cuma antrian itu, jadi fetch yang macet bisa dibuang tanpa ikut membunuh
+     * ekstraksi yang sedang jalan.
+     *
+     * Job yang sedang dikerjakan tetap selesai: worker sudah memegangnya di memori,
+     * barisnya (yang `reserved_at`-nya terisi) cuma dihapus lebih awal — `delete()`
+     * worker sesudahnya jadi no-op. Yang benar-benar dibatalkan cuma yang belum diambil.
+     *
+     * `cache_locks` ikut dibersihkan: lock `unique` milik job yang dibuang tidak
+     * ada yang melepas, dan sampai `uniqueFor` habis job sejenis berikutnya
+     * kelihatan hilang diam-diam. Dibersihkan seluruhnya juga saat membatalkan satu
+     * antrian — kuncinya tidak menyimpan nama antrian, jadi tidak bisa dipilih.
+     */
+    public function clear(?string $queue = null): JsonResponse
     {
-        abort_unless(app()->isLocal(), 404);
+        abort_unless($queue === null || in_array($queue, self::QUEUES, true), 404);
 
-        PipelineLog::write('run', '== tombol pipeline: antrikan fetch semua akun approved');
+        $antri = DB::table('jobs')->when($queue, fn ($q) => $q->where('queue', $queue))->delete();
+        $gagal = DB::table('failed_jobs')->when($queue, fn ($q) => $q->where('queue', $queue))->delete();
+        DB::table('cache_locks')->delete();
 
-        Artisan::call('packages:crawl', array_filter([
-            'file' => is_file(base_path('accounts.txt')) ? base_path('accounts.txt') : null,
-            '--limit' => 9,
-        ]));
+        PipelineLog::write($queue ?? 'run',
+            '== batalkan antrian '.($queue ?? 'semua').": {$antri} job antri + {$gagal} job gagal dibuang");
 
-        foreach (preg_split('/\r?\n/', Artisan::output()) as $line) {
-            PipelineLog::write('run', $line);
-        }
+        return response()->json($this->numbers());
+    }
 
-        // Pemindaian ekstraksi tidak menunggu fetch selesai: post yang sudah ada di
-        // storage/raw dari putaran sebelumnya langsung masuk antrian ai.
-        ExtractPending::dispatch();
+    /**
+     * Kembalikan job gagal ke antriannya. Kebalikan `clear()`: yang itu membuang,
+     * yang ini mencoba lagi — dan mayoritas isi `failed_jobs` di sini memang layak
+     * dicoba lagi (worker di-Ctrl+C, `database is locked`, model timeout).
+     *
+     * Bungkus tipis `queue:retry`, bukan insert manual ke `jobs`: payload gagal punya
+     * uuid + hitungan percobaan yang harus di-reset, dan menulisnya sendiri berarti
+     * menyalin logika framework yang sudah ada.
+     *
+     * Lock `unique` tidak dicek ulang saat retry (payloadnya didorong langsung, bukan
+     * lewat dispatcher), jadi `cache_locks` sengaja tidak disentuh di sini — beda
+     * dengan `clear()`, yang justru meninggalkan lock tanpa pemilik.
+     */
+    public function retry(?string $queue = null): JsonResponse
+    {
+        abort_unless($queue === null || in_array($queue, self::QUEUES, true), 404);
+
+        $jumlah = DB::table('failed_jobs')->when($queue, fn ($q) => $q->where('queue', $queue))->count();
+        Artisan::call('queue:retry', $queue ? ['--queue' => $queue] : ['id' => ['all']]);
+
+        PipelineLog::write($queue ?? 'run',
+            '== ulangi antrian '.($queue ?? 'semua').": {$jumlah} job gagal dikembalikan ke antrian");
 
         return response()->json($this->numbers());
     }
 
     public function status(): JsonResponse
     {
-        abort_unless(app()->isLocal(), 404);
-
         return response()->json($this->numbers());
     }
 
@@ -59,9 +93,24 @@ class PipelineController extends Controller
      */
     private function numbers(): array
     {
-        $antrianPer = DB::table('jobs')->selectRaw('queue, count(*) as total')
+        // Job yang sedang dikerjakan tetap punya barisnya di `jobs`, cuma `reserved_at`-nya
+        // terisi — dipisah biar "3 antri" tidak sebenarnya berarti "2 antri, 1 jalan".
+        $antrianPer = DB::table('jobs')->selectRaw(
+            'queue, sum(reserved_at is null) as antri, sum(reserved_at is not null) as jalan',
+        )->groupBy('queue')->get()->keyBy('queue');
+        $gagalPer = DB::table('failed_jobs')->selectRaw('queue, count(*) as total')
             ->groupBy('queue')->pluck('total', 'queue');
-        $antrian = (int) $antrianPer->sum();
+
+        // Angka "3 gagal" tanpa sebabnya cuma bikin buka sqlite. Yang ditarik cuma
+        // kegagalan TERAKHIR per antrian (max(id)) — kolom `exception` itu stacktrace
+        // penuh, jadi menarik semua barisnya berarti ratusan KB tiap polling 2 detik.
+        // Baris pertama sudah memuat kelas + pesannya; sisanya (" in /path/file.php:12"
+        // dan stacktrace) dibuang.
+        $pesanGagal = DB::table('failed_jobs')
+            ->whereIn('id', fn ($q) => $q->from('failed_jobs')->selectRaw('max(id)')->groupBy('queue'))
+            ->pluck('exception', 'queue')
+            ->map(fn ($e) => Str::limit(trim(Str::before(Str::before($e, "\n"), ' in /')), 200));
+        $antrian = (int) $antrianPer->sum('antri');
 
         // Satu glob per direktori, lalu dibandingkan sebagai himpunan. Cek per-post
         // (glob di dalam loop) berarti ratusan syscall tiap polling 2 detik.
@@ -82,10 +131,12 @@ class PipelineController extends Controller
         $status = Package::query()->selectRaw('status, count(*) as total')
             ->groupBy('status')->pluck('total', 'status');
 
+        $sekarang = PipelineLog::current();
+
         return [
             // Baris terakhir per antrian: ig sedang fetch siapa, ai sedang mengekstrak
             // apa, db sedang mengimpor apa. Sumbernya satu — storage/pipeline.jsonl.
-            'sekarang' => PipelineLog::current(),
+            'sekarang' => $sekarang,
             // Jejak detail: request ke graph.facebook.com, tiap gambar yang di-download,
             // request ke model vision & penyusun, nama file yang ditulis.
             'log' => PipelineLog::tail(80),
@@ -113,11 +164,20 @@ class PipelineController extends Controller
             'published' => (int) ($status['published'] ?? 0),
 
             'antrian' => $antrian,
-            'antri_ig' => (int) ($antrianPer['ig'] ?? 0),
-            'antri_ai' => (int) ($antrianPer['ai'] ?? 0),
-            'antri_db' => (int) ($antrianPer['db'] ?? 0),
-            'gagal' => DB::table('failed_jobs')->count(),
+            'antri_ig' => (int) ($antrianPer['ig']->antri ?? 0),
+            'antri_ai' => (int) ($antrianPer['ai']->antri ?? 0),
+            'antri_db' => (int) ($antrianPer['db']->antri ?? 0),
+            'gagal' => (int) $gagalPer->sum(),
             'jalan' => $antrian > 0,
+
+            // Satu blok per antrian: yang dipakai panel buat kartu + tombol batalnya.
+            'antrian_per' => collect(self::QUEUES)->mapWithKeys(fn ($q) => [$q => [
+                'antri' => (int) ($antrianPer[$q]->antri ?? 0),
+                'proses' => (int) ($antrianPer[$q]->jalan ?? 0),
+                'gagal' => (int) ($gagalPer[$q] ?? 0),
+                'pesan_gagal' => $pesanGagal[$q] ?? null,
+                'sekarang' => $sekarang[$q] ?? null,
+            ]]),
         ];
     }
 }

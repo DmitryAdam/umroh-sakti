@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Package;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class PackageImportTest extends TestCase
@@ -145,22 +146,83 @@ class PackageImportTest extends TestCase
         $this->assertSame(0, Package::count());
     }
 
-    /** --prune menghapus file post yang bukan penawaran; jejaknya di excluded_posts. */
-    public function test_prune_menghapus_post_bukan_penawaran(): void
+    /**
+     * --prune menghapus file post yang ditolak, KECUALI `bukan_paket`: itu vonis
+     * mesin (gerbang vision / saringan struktural) dan yang paling sering salah —
+     * filenya ditahan sampai operator menekan blokir. Jejaknya tetap di
+     * excluded_posts, jadi fetch & extract tidak mengulanginya.
+     */
+    public function test_prune_menghapus_yang_ditolak_kecuali_bukan_paket(): void
     {
         $dir = storage_path('framework/testing/extracted');
         is_dir($dir) || mkdir($dir, 0775, true);
         array_map('unlink', glob("$dir/*.json") ?: []);
+        File::ensureDirectoryExists(storage_path('raw/agen_test/trash1'));
+        File::ensureDirectoryExists(storage_path('raw/agen_test/kadaluarsa1'));
         file_put_contents("$dir/0.json", json_encode(
             $this->extraction(['_media_id' => 'trash1', '_source' => 'agen_test', 'post_kind' => 'testimoni']),
+        ));
+        file_put_contents("$dir/1.json", json_encode(
+            $this->extraction(['_media_id' => 'kadaluarsa1', '_source' => 'agen_test', 'departure_date' => '2026-01-05']),
+        ));
+        touch("$dir/0.json", time() - 3600);   // ekstraksinya sudah lama selesai
+        touch("$dir/1.json", time() - 3600);
+
+        $this->artisan('packages:import', ['--dir' => $dir, '--prune' => true])->assertSuccessful();
+
+        $this->assertFileExists("$dir/0.json");
+        $this->assertDirectoryExists(storage_path('raw/agen_test/trash1'));
+        $this->assertFileDoesNotExist("$dir/1.json");
+        $this->assertDirectoryDoesNotExist(storage_path('raw/agen_test/kadaluarsa1'));
+
+        $this->assertSame(0, Package::count());
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'trash1', 'reason' => 'bukan_paket']);
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'kadaluarsa1', 'reason' => 'sebelum_ambang']);
+    }
+
+    /**
+     * Antrian `ai` menulis slide carousel satu per satu; import yang membaca
+     * separuhnya pernah menghapus folder raw yang dibutuhkan slide berikutnya —
+     * paketnya lahir tanpa flyer (paket #375, selisih 10 detik). Hapusnya tidak
+     * bisa dibatalkan, jadi hasil ekstraksi yang masih hangat cuma dikecualikan.
+     */
+    public function test_prune_menunggu_ekstraksi_yang_masih_hangat(): void
+    {
+        $dir = storage_path('framework/testing/extracted');
+        is_dir($dir) || mkdir($dir, 0775, true);
+        array_map('unlink', glob("$dir/*.json") ?: []);
+        File::ensureDirectoryExists(storage_path('raw/agen_test/hangat1'));
+        file_put_contents("$dir/0.json", json_encode(
+            $this->extraction(['_media_id' => 'hangat1', '_source' => 'agen_test', 'post_kind' => 'testimoni']),
         ));
 
         $this->artisan('packages:import', ['--dir' => $dir, '--prune' => true])->assertSuccessful();
 
-        $this->assertFileDoesNotExist("$dir/0.json");
-        $this->assertDirectoryDoesNotExist(storage_path('raw/agen_test/trash1'));
-        $this->assertSame(0, Package::count());
-        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'trash1']);
+        $this->assertFileExists("$dir/0.json");
+        $this->assertDirectoryExists(storage_path('raw/agen_test/hangat1'),
+            'slide berikutnya masih butuh folder raw ini');
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'hangat1']);
+    }
+
+    /** Exclusion yang kadung tercatat saat carouselnya belum habis diekstrak wajib dicabut. */
+    public function test_exclusion_dicabut_kalau_slide_lain_ternyata_jadi_paket(): void
+    {
+        \App\Support\ExcludedPost::add('carousel3', 'agen_a', 'sebelum_ambang');
+
+        $this->import(
+            $this->extraction([
+                '_media_id' => 'carousel3',
+                '_useful_images' => ['0.jpg'],
+                'post_kind' => 'education',
+                'departure_date' => null,
+                'duration_days' => null,
+                'price_tiers' => [],
+            ]),
+            $this->extraction(['_media_id' => 'carousel3', '_useful_images' => ['1.jpg']]),
+        );
+
+        $this->assertSame(1, Package::where('media_id', 'carousel3')->count());
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'carousel3']);
     }
 
     /**
@@ -438,6 +500,141 @@ class PackageImportTest extends TestCase
 
         $this->assertSame(2, Package::count(), 'dua gambar penawaran = dua paket');
         $this->assertSame([1, 2], Package::orderBy('flyer_index')->pluck('flyer_index')->all());
+    }
+
+    /** Satu keberangkatan dalam `departures`, dipakai di test flyer jadwal. */
+    private function departure(array $override = []): array
+    {
+        return array_merge([
+            'departure_date' => null,
+            'date_certainty' => 'exact',
+            'duration_days' => null,
+            'price_tiers' => [],
+            'airline' => null,
+            'extension' => 'unknown',
+            'hotel_makkah' => null,
+            'hotel_madinah' => null,
+        ], $override);
+    }
+
+    /**
+     * Flyer jadwal: satu gambar, belasan keberangkatan. Semuanya jadi barisnya
+     * sendiri — sebelum `departures` ada cuma yang paling menonjol yang masuk dan
+     * sisanya hilang, padahal justru di situ jadwalnya paling banyak.
+     */
+    public function test_satu_gambar_jadwal_jadi_beberapa_paket(): void
+    {
+        $harga = fn (int $amount) => [
+            ['occupancy' => 'quad', 'amount' => $amount, 'currency' => 'IDR', 'is_starting_from' => false],
+        ];
+
+        $this->import($this->extraction([
+            '_media_id' => 'jadwal1',
+            '_useful_images' => ['1.jpg'],
+            'departure_date' => '2026-08-04',
+            'duration_days' => 9,
+            'departures' => [
+                $this->departure(['departure_date' => '2026-08-04', 'duration_days' => 9, 'price_tiers' => $harga(31900000)]),
+                $this->departure(['departure_date' => '2026-08-13', 'duration_days' => 13, 'price_tiers' => $harga(34900000)]),
+                // Tanpa harga sendiri = pakai harga tingkat atas, bukan ditolak.
+                $this->departure(['departure_date' => '2026-08-16', 'duration_days' => 9]),
+            ],
+        ]));
+
+        $this->assertSame(3, Package::count());
+        $this->assertSame([0, 1, 2], Package::orderBy('offer_index')->pluck('offer_index')->all());
+        $this->assertSame(
+            ['2026-08-04' => 31900000, '2026-08-13' => 34900000, '2026-08-16' => 25900000],
+            Package::orderBy('offer_index')->get()
+                ->mapWithKeys(fn ($p) => [$p->departure_date->toDateString() => (int) $p->price_quad])->all(),
+        );
+        $this->assertSame([9, 13, 9], Package::orderBy('offer_index')->pluck('duration_days')->all());
+        // Semuanya dari gambar yang sama: satu flyer, satu file di disk flyers.
+        $this->assertSame([1], Package::pluck('flyer_index')->unique()->values()->all());
+        // Field yang tidak pernah ditulis ulang per baris tetap diwarisi.
+        $this->assertSame(['Saudia'], Package::pluck('airline')->unique()->all());
+    }
+
+    /**
+     * Sebagian keberangkatan sudah lewat ambang, sebagian belum: yang lewat cuma
+     * dilewat barisnya. Postnya TIDAK dikecualikan — kalau iya, jadwal yang masih
+     * berlaku di gambar yang sama ikut hilang selamanya.
+     */
+    public function test_jadwal_yang_sebagian_lewat_ambang_tidak_mengecualikan_postnya(): void
+    {
+        config(['umroh.min_departure' => '2026-08-01']);
+
+        $this->import($this->extraction([
+            '_media_id' => 'jadwal2',
+            'departure_date' => '2026-07-10',
+            'departures' => [
+                $this->departure(['departure_date' => '2026-07-10']),
+                $this->departure(['departure_date' => '2026-09-10']),
+            ],
+        ]));
+
+        $this->assertSame(1, Package::count(), 'cuma keberangkatan setelah ambang yang masuk');
+        $this->assertSame('2026-09-10', Package::first()->departure_date->toDateString());
+        $this->assertDatabaseCount('excluded_posts', 0);
+    }
+
+    /** Semua keberangkatannya sudah lewat = postnya memang tidak berguna lagi. */
+    public function test_jadwal_yang_semua_keberangkatannya_lewat_tetap_dikecualikan(): void
+    {
+        config(['umroh.min_departure' => '2026-08-01']);
+
+        $this->import($this->extraction([
+            '_media_id' => 'jadwal3',
+            'departure_date' => '2026-07-10',
+            'departures' => [
+                $this->departure(['departure_date' => '2026-07-10']),
+                $this->departure(['departure_date' => '2026-07-20']),
+            ],
+        ]));
+
+        $this->assertSame(0, Package::count());
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'jadwal3', 'reason' => 'sebelum_ambang']);
+    }
+
+    /** Import ulang file yang sama tidak menggandakan barisnya per keberangkatan. */
+    public function test_import_ulang_jadwal_tidak_menggandakan_baris(): void
+    {
+        $doc = $this->extraction([
+            '_media_id' => 'jadwal4',
+            'departures' => [
+                $this->departure(['departure_date' => '2026-09-14']),
+                $this->departure(['departure_date' => '2026-10-20']),
+            ],
+        ]);
+
+        $this->import($doc);
+        $this->import($doc);
+
+        $this->assertSame(2, Package::count());
+    }
+
+    /**
+     * Flyer yang jadi paket pindah dari tempat singgah (storage/raw) ke disk
+     * `flyers`; slide lain dari carousel yang sama tetap di raw. Kalau raw-nya
+     * tidak ikut dihapus, "pindah ke s3" cuma jadi penggandaan byte.
+     */
+    public function test_flyer_paket_dipindah_ke_disk_flyers(): void
+    {
+        Storage::fake(Package::FLYER_DISK);
+
+        $raw = storage_path('raw/agen_a/promo1');
+        File::ensureDirectoryExists($raw);
+        file_put_contents("$raw/1.jpg", 'flyer-bytes');
+        file_put_contents("$raw/2.jpg", 'foto-suasana');
+
+        $this->import($this->extraction(['_media_id' => 'promo1', '_useful_images' => ['1.jpg']]));
+
+        Storage::disk(Package::FLYER_DISK)->assertExists('promo1/1.jpg');
+        $this->assertSame('flyer-bytes', Storage::disk(Package::FLYER_DISK)->get('promo1/1.jpg'));
+        $this->assertFileDoesNotExist("$raw/1.jpg", 'raw flyer wajib dihapus setelah pindah');
+        $this->assertFileExists("$raw/2.jpg", 'slide non-paket bukan urusan promosi');
+
+        File::deleteDirectory(storage_path('raw/agen_a'));
     }
 
     public function test_paket_di_bawah_bpiu_referensi_ditandai(): void

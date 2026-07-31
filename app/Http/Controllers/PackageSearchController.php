@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ExtractPost;
+use App\Jobs\FetchAccount;
 use App\Models\Package;
+use App\Models\SourceAccount;
 use App\Support\ExcludedPost;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -33,7 +36,7 @@ class PackageSearchController extends Controller
     public const FACETS = [
         'city' => 'departure_city',
         'airline' => 'airline',
-        'akun' => 'source_account',
+        'account' => 'source_account',
         'extension' => 'extension',
         'certainty' => 'date_certainty',
         'status' => 'status',
@@ -41,10 +44,11 @@ class PackageSearchController extends Controller
 
     public function index(Request $request): View
     {
-        // Pratinjau lokal: lihat paket yang belum lolos review. Default menyala di
-        // lokal (?semua=0 untuk mematikan), tapi dikunci ke env local supaya jalur
-        // "publish tanpa review manusia" tidak pernah ada di produksi.
-        $preview = app()->isLocal() && $request->boolean('semua', true);
+        // Pratinjau operator: lihat paket yang belum lolos review, plus tombol aksi
+        // per kartu. Default menyala kalau login (?all=0 untuk mematikan). Tamu
+        // tidak pernah dapat keduanya — jalur "publish tanpa review manusia" tetap
+        // tidak ada, yang berubah cuma kuncinya (login, bukan env local).
+        $preview = $request->user() !== null && $request->boolean('all', true);
 
         $base = fn () => Package::query()->unless($preview, fn ($q) => $q->published());
 
@@ -154,14 +158,26 @@ class PackageSearchController extends Controller
     }
 
     /**
+     * Satu-satunya jalur yang mengubah `status` sesudah import: operator menekan
+     * pilihannya di kartu. Sengaja manual — aturan "jangan auto-publish harga"
+     * berarti tidak boleh ada kode yang menaikkannya ke `published` sendiri.
+     */
+    public function status(Package $package, Request $request): JsonResponse
+    {
+        $package->update($request->validate([
+            'status' => ['required', Rule::in(Package::STATUSES)],
+        ]));
+
+        return response()->json(['status' => $package->status]);
+    }
+
+    /**
      * "Ini bukan flyer umroh" — buang paketnya, kecualikan post sumbernya supaya tidak
      * pernah di-scrap lagi, dan hapus raw + hasil ekstraksinya.
      * Keputusannya dicatat ke storage/feedback.jsonl sebagai bahan perbaikan prompt.
      */
     public function destroy(Package $package, Request $request): JsonResponse
     {
-        abort_unless(app()->isLocal(), 404);
-
         // Satu carousel bisa jadi beberapa paket (satu gambar = satu baris). Kalau
         // slide lain dari post yang sama masih hidup, × cuma menyangkal baris ini:
         // post-nya tidak dikecualikan dan rawnya tidak dihapus — kalau
@@ -197,13 +213,89 @@ class PackageSearchController extends Controller
     }
 
     /**
+     * "Baca ulang pakai AI" — gambar post ini dikirim lagi ke vision + penyusun.
+     *
+     * Tiga langkah yang tidak bisa dilewat: flyer dikembalikan ke storage/raw
+     * (extract cuma membaca dari sana, dan promoteFlyer sudah memindahkannya),
+     * hasil ekstraksi lama dihapus, dan barisnya dihapus — `importOne` sengaja
+     * tidak pernah menimpa baris yang sudah ada, jadi tanpa ini hasil baca
+     * ulangnya tidak akan pernah tampil.
+     *
+     * Postnya TIDAK dikecualikan dan rawnya tidak dihapus: ini bukan vonis atas
+     * postnya, cuma minta dibaca ulang.
+     */
+    public function reextract(Package $package): JsonResponse
+    {
+        if (! is_file(storage_path("raw/{$package->source_account}/{$package->media_id}/post.json"))) {
+            return response()->json(['error' => 'raw postnya sudah tidak ada — ambil ulang dulu'], 409);
+        }
+
+        // Semua slide dikembalikan, bukan cuma milik paket ini: nomor slide dari
+        // vision menunjuk gambar ke-N yang DIKIRIM, jadi satu gambar yang hilang
+        // menggeser penomoran paket-paket sebelahnya.
+        foreach (Package::where('media_id', $package->media_id)->get() as $slide) {
+            $slide->restoreFlyer();
+        }
+
+        foreach (glob(storage_path("extracted/{$package->media_id}{.json,-*.json}"), GLOB_BRACE) ?: [] as $file) {
+            File::delete($file);
+        }
+
+        $package->delete();
+        ExtractPost::dispatch($package->media_id);
+
+        return response()->json(['queued' => $package->media_id]);
+    }
+
+    /**
+     * "Ambil ulang postingannya" — raw postnya dibuang lalu akunnya di-fetch lagi,
+     * jadi gambarnya di-download ulang (signed CDN URL memang tidak disimpan) DAN
+     * dibaca ulang: ExtractPending memindai raw baru, ExtractPost menyusunnya,
+     * ImportPackages membikin barisnya lagi. Tanpa membuang hasil ekstraksi lama
+     * + barisnya, download itu tidak mengubah apa pun yang tampil — ExtractPending
+     * melewati post yang sudah punya file di `storage/extracted`, dan `importOne`
+     * memang tidak pernah menimpa baris yang sudah ada.
+     *
+     * Yang dihapus SEMUA slide se-media_id, bukan cuma paket ini: postnya
+     * di-download ulang utuh, dan nomor slide dari vision menunjuk gambar ke-N
+     * yang dikirim — sisa baris lama bikin penomorannya tabrakan.
+     *
+     * Postnya tidak dikecualikan: ini bukan vonis "bukan paket".
+     */
+    public function refetch(Package $package): JsonResponse
+    {
+        $account = SourceAccount::firstWhere('username', $package->source_account);
+
+        if (! $account) {
+            return response()->json(['error' => "akun @{$package->source_account} tidak terdaftar"], 409);
+        }
+
+        // Tanpa ini fetch melewatinya: "sudah ada di storage/raw".
+        File::deleteDirectory(storage_path("raw/{$package->source_account}/{$package->media_id}"));
+
+        foreach (glob(storage_path("extracted/{$package->media_id}{.json,-*.json}"), GLOB_BRACE) ?: [] as $file) {
+            File::delete($file);
+        }
+
+        // Flyer yang sudah dipromosikan ikut dibuang — gambarnya di-download lagi,
+        // jadi yang lama cuma jadi yatim di disk `flyers` (tidak ada baris yang
+        // menunjuknya, dan `promoteFlyer` menulis path yang sama).
+        foreach (Package::where('media_id', $package->media_id)->get() as $slide) {
+            $slide->deleteSources();
+            $slide->delete();
+        }
+
+        FetchAccount::dispatch($account, 50);
+
+        return response()->json(['queued' => $account->username]);
+    }
+
+    /**
      * Catatan koreksi dari pratinjau lokal. Bahan mentah untuk memperbaiki prompt
      * ekstraksi — tidak mengubah status publikasi.
      */
     public function feedback(Package $package, Request $request): RedirectResponse|JsonResponse
     {
-        abort_unless(app()->isLocal(), 404);
-
         $package->update($request->validate([
             'review_verdict' => ['required', Rule::in(array_keys(Package::REVIEW_VERDICTS))],
             'review_note' => ['nullable', 'string', 'max:2000'],
@@ -220,7 +312,7 @@ class PackageSearchController extends Controller
     public function show(Package $package, Request $request): View
     {
         abort_unless(
-            $package->status === 'published' || (app()->isLocal() && $request->boolean('semua', true)),
+            $package->status === 'published' || $request->user() !== null,
             404,
         );
 

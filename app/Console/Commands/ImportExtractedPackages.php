@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Package;
+use App\Models\SourceAccount;
 use App\Support\ExcludedPost;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +24,9 @@ class ImportExtractedPackages extends Command
 
     protected $description = 'Impor hasil ekstraksi probe.php ke database';
 
+    /** Detik: umur minimal file hasil ekstraksi sebelum rawnya boleh dihapus (lihat buang()). */
+    private const PRUNE_GRACE = 300;
+
     public function handle(): int
     {
         $dir = $this->option('dir') ?: storage_path('extracted');
@@ -38,17 +42,39 @@ class ImportExtractedPackages extends Command
             DB::table('packages')->delete();
         }
 
+        // Akun yang diblokir setelah ekstraksinya jalan: filenya sudah dibuang saat
+        // blokir, tapi job `ai` yang masih di tengah jalan menulisnya lagi sesudah itu.
+        // Tanpa saringan ini paketnya lahir kembali beberapa menit setelah diblokir.
+        $diblokir = SourceAccount::blocked()->pluck('username')->flip();
+
         $created = $merged = $skipped = $bukanPaket = $lewatTanggal = $sudahAda = $slideBuntu = 0;
+        $blokir = 0;
         $kurang = ['tanpa_tanggal' => 0, 'tanpa_harga' => 0];
         $tolak = [];
 
         foreach ($files as $file) {
-            $data = json_decode(file_get_contents($file), true);
+            // File bisa lenyap antara glob dan baca — tombol × dan prune menghapus
+            // hasil ekstraksi sementara import menyusuri daftar lamanya. Bukan galat;
+            // sama seperti loop post di probe.php cmdExtract().
+            $json = @file_get_contents($file);
+            $data = $json === false ? null : json_decode($json, true);
             if (! is_array($data) || ! isset($data['_media_id'])) {
                 $skipped++;
 
                 continue;
             }
+
+            if ($diblokir->has($data['_source'] ?? '')) {
+                File::delete($file);
+                $blokir++;
+
+                continue;
+            }
+
+            // Satu gambar bisa menjual banyak keberangkatan (flyer jadwal), jadi satu
+            // file bisa jadi belasan baris. Ekspansinya di sini supaya semua saringan
+            // di bawah menilai keberangkatan, bukan gambarnya.
+            $offers = $this->offers($data);
 
             // Dua alasan buang yang keduanya permanen: bukan penawaran paket, atau
             // keberangkatannya sebelum ambang. Ditunda dulu, tidak langsung dieksekusi:
@@ -56,7 +82,9 @@ class ImportExtractedPackages extends Command
             $alasan = match (true) {
                 ! $this->isPackageOffer($data) => 'bukan_paket',
                 $this->isHaji($data) => 'haji',
-                $this->tooEarly($data) => 'sebelum_ambang',
+                // Postnya cuma dikecualikan kalau SEMUA keberangkatannya sudah lewat.
+                // Flyer jadwal yang separuh barisnya kedaluwarsa tetap dipakai.
+                array_filter($offers, fn ($o) => ! $this->tooEarly($o)) === [] => 'sebelum_ambang',
                 default => null,
             };
 
@@ -67,24 +95,34 @@ class ImportExtractedPackages extends Command
                 continue;
             }
 
-            // Wajib: keberangkatan (minimal bulan) DAN harga. Paket tanpa salah satunya
-            // tidak bisa dicari, tidak bisa diurut, dan tidak bisa dibandingkan — itu
-            // seluruh gunanya portal ini.
-            //
-            // Sengaja TIDAK masuk $tolak: ini kegagalan membaca, bukan vonis atas
-            // postnya. Yang mengecualikan post itu permanen (fetch + extract ikut
-            // dilewati), jadi flyer yang harganya cuma gagal terbaca akan hilang
-            // selamanya begitu promptnya membaik. Filenya dibiarkan di
-            // storage/extracted — import berikutnya mencobanya lagi, gratis.
-            if ($belum = $this->belumLengkap($data)) {
-                $kurang[$belum]++;
+            foreach ($offers as $offerIndex => $offer) {
+                // Keberangkatan yang sudah lewat ambang dilewat satu-satu — barisnya
+                // saja, bukan filenya (baris lain di flyer jadwal yang sama masih laku).
+                if ($this->tooEarly($offer)) {
+                    $lewatTanggal++;
 
-                continue;
+                    continue;
+                }
+
+                // Wajib: keberangkatan (minimal bulan) DAN harga. Paket tanpa salah satunya
+                // tidak bisa dicari, tidak bisa diurut, dan tidak bisa dibandingkan — itu
+                // seluruh gunanya portal ini.
+                //
+                // Sengaja TIDAK masuk $tolak: ini kegagalan membaca, bukan vonis atas
+                // postnya. Yang mengecualikan post itu permanen (fetch + extract ikut
+                // dilewati), jadi flyer yang harganya cuma gagal terbaca akan hilang
+                // selamanya begitu promptnya membaik. Filenya dibiarkan di
+                // storage/extracted — import berikutnya mencobanya lagi, gratis.
+                if ($belum = $this->belumLengkap($offer)) {
+                    $kurang[$belum]++;
+
+                    continue;
+                }
+
+                DB::transaction(function () use ($offer, $offerIndex, &$created, &$merged, &$sudahAda) {
+                    $this->importOne($offer, $offerIndex, $created, $merged, $sudahAda);
+                });
             }
-
-            DB::transaction(function () use ($data, &$created, &$merged, &$sudahAda) {
-                $this->importOne($data, $created, $merged, $sudahAda);
-            });
         }
 
         $slideBuntu = $this->buang($tolak);
@@ -94,10 +132,63 @@ class ImportExtractedPackages extends Command
             ." · bukan penawaran paket: $bukanPaket"
             ." · keberangkatan sebelum $ambang: $lewatTanggal"
             ." · tanpa tanggal: {$kurang['tanpa_tanggal']} · tanpa harga: {$kurang['tanpa_harga']}"
+            ." · akun diblokir: $blokir"
             ." · slide ditolak tapi postnya dipakai: $slideBuntu · rusak: $skipped");
         $this->line('Review di: / (halaman pratinjau lokal)');
 
         return self::SUCCESS;
+    }
+
+    /** Batas keberangkatan per gambar. Flyer jadwal terpanjang yang terukur 18 baris. */
+    private const MAX_DEPARTURES = 40;
+
+    /**
+     * Satu hasil ekstraksi -> satu data paket per keberangkatan.
+     *
+     * Flyer jadwal ("Edisi Agustus | Edisi September", tabel tanggal) menjual
+     * belasan keberangkatan dalam SATU gambar, bedanya cuma tanggal, durasi, dan
+     * harga; hotel/maskapai kadang ikut beda per program. Sampai `departures` ada,
+     * cuma yang paling menonjol yang jadi baris dan sisanya hilang — padahal
+     * justru di situ jadwalnya paling banyak.
+     *
+     * Yang null di satu keberangkatan diwarisi dari field tingkat atas (PPIU, kota,
+     * pembimbing, fasilitas tidak pernah ditulis ulang per baris). `departures`
+     * kosong = flyer satu keberangkatan, jalur lama, satu baris.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function offers(array $d): array
+    {
+        $departures = array_slice(
+            array_filter($d['departures'] ?? [], is_array(...)), 0, self::MAX_DEPARTURES,
+        );
+
+        if ($departures === []) {
+            return [$d];
+        }
+
+        // Tabel jadwalnya tidak ikut disalin ke tiap baris: isinya sama untuk semua
+        // baris yang lahir dari gambar ini, jadi menyimpannya N kali cuma numpuk byte.
+        unset($d['departures']);
+
+        return array_values(array_map(function (array $dep) use ($d) {
+            $override = array_filter([
+                'departure_date' => $dep['departure_date'] ?? null,
+                'duration_days' => $dep['duration_days'] ?? null,
+                'airline' => $dep['airline'] ?? null,
+                'hotel_makkah' => $dep['hotel_makkah'] ?? null,
+                'hotel_madinah' => $dep['hotel_madinah'] ?? null,
+                'price_tiers' => $dep['price_tiers'] ?? [],
+                // 'none' itu jawaban ("tanpa extension"), 'unknown' berarti tidak
+                // ditulis per baris — yang terakhir mewarisi tingkat atas.
+                'extension' => ($dep['extension'] ?? 'unknown') === 'unknown' ? null : $dep['extension'],
+                // Kepastian tanggal ikut tanggalnya: kalau barisnya punya tanggal
+                // sendiri, label dari tingkat atas tidak berlaku untuk baris ini.
+                'date_certainty' => ($dep['departure_date'] ?? null) ? ($dep['date_certainty'] ?? null) : null,
+            ], fn ($v) => $v !== null && $v !== []);
+
+            return $override + $d;
+        }, $departures));
     }
 
     /**
@@ -221,13 +312,33 @@ class ImportExtractedPackages extends Command
 
         foreach ($tolak as [$file, $data, $alasan]) {
             if (Package::where('media_id', $data['_media_id'])->exists()) {
+                // Post ini kadung dikecualikan di import sebelumnya — bisa terjadi
+                // kalau import jalan saat carouselnya belum habis diekstrak. Cabut:
+                // slide yang laku butuh postnya tetap bisa di-fetch ulang.
+                DB::table('excluded_posts')->where('media_id', $data['_media_id'])->delete();
                 $buntu++;
 
                 continue;
             }
 
             ExcludedPost::add($data['_media_id'], $data['_source'] ?? null, $alasan);
-            if ($this->option('prune')) {
+
+            // Penghapusannya ditunda selama ekstraksi post ini mungkin masih jalan.
+            // Antrian `ai` menulis slide carousel satu per satu, jadi import di
+            // antrian `db` bisa membaca separuhnya: slide 1-2 ditolak -> folder raw
+            // dihapus -> slide 3 yang menyusul jadi paket TANPA flyer (paket #375,
+            // selisihnya 10 detik). Barisnya excluded_posts sudah menahan fetch &
+            // extract ulang, jadi menunda hapusnya tidak membayar apa pun; import
+            // berikutnya yang membereskan, dan saat itu slide yang laku sudah punya
+            // barisnya sehingga cabang $buntu di atas yang menang.
+            // `bukan_paket` itu vonis mesin, bukan vonis manusia — dan yang paling
+            // sering salah: satu flyer promo yang kelewat gerbang vision hilang
+            // selamanya begitu rawnya dibuang, padahal cuma promptnya yang meleset.
+            // Filenya ditahan sampai operator menekan blokir di /accounts/{id}/posts;
+            // itu yang memanggil prune-nya. Alasan lain tetap dibuang di sini.
+            if ($alasan !== 'bukan_paket'
+                && $this->option('prune')
+                && time() - (int) @filemtime($file) >= self::PRUNE_GRACE) {
                 $this->prune($file, $data);
             }
         }
@@ -248,15 +359,16 @@ class ImportExtractedPackages extends Command
         File::delete($file);
     }
 
-    private function importOne(array $d, int &$created, int &$merged, int &$sudahAda): void
+    private function importOne(array $d, int $offerIndex, int &$created, int &$merged, int &$sudahAda): void
     {
-        // Identitas baris itu (media_id, flyer_index), bukan dedup_key. dedup_key
-        // ikut berubah kalau ekstraksi ulang membaca "Saudia" jadi "Saudia Airlines"
-        // — cari lewat itu saja dan baris lamanya tidak ketemu, create() menabrak
-        // UNIQUE, dan exception-nya membatalkan SISA backlog, bukan cuma file ini.
-        // Barisnya sengaja tidak ditimpa: `status` di situ hasil review manusia.
+        // Identitas baris itu (media_id, flyer_index, offer_index), bukan dedup_key.
+        // dedup_key ikut berubah kalau ekstraksi ulang membaca "Saudia" jadi "Saudia
+        // Airlines" — cari lewat itu saja dan baris lamanya tidak ketemu, create()
+        // menabrak UNIQUE, dan exception-nya membatalkan SISA backlog, bukan cuma
+        // file ini. Barisnya sengaja tidak ditimpa: `status` hasil review manusia.
         $sudah = Package::where('media_id', $d['_media_id'])
             ->where('flyer_index', $this->flyerIndex($d))
+            ->where('offer_index', $offerIndex)
             ->exists();
 
         if ($sudah) {
@@ -282,12 +394,13 @@ class ImportExtractedPackages extends Command
             return;
         }
 
-        Package::create([
+        $package = Package::create([
             ...$this->prices($d),
             ...$this->hotels($d),
             'source_account' => $d['_source'] ?? null,
             'media_id' => $d['_media_id'],
             'flyer_index' => $this->flyerIndex($d),
+            'offer_index' => $offerIndex,
             'source_permalink' => $d['_permalink'] ?? null,
             'source_posted_at' => $d['_posted_at'] ?? null,
             'departure_date' => $this->tanggal($d),
@@ -311,6 +424,12 @@ class ImportExtractedPackages extends Command
             )),
             'facilities_raw' => $d['facilities_raw'] ?? null,
         ]);
+
+        // Baris paket = vonis "ini beneran penawaran". Flyernya pindah dari
+        // tempat singgah (storage/raw) ke disk `flyers`; slide lain dari carousel
+        // yang sama tetap di raw sampai prune.
+        $package->promoteFlyer();
+
         $created++;
     }
 
