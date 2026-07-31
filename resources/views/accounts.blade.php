@@ -2,13 +2,6 @@
 @section('title', 'Akun Sumber')
 
 @section('content')
-<div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-    <strong>Daftar akun (lokal).</strong>
-    <span>Akun yang dimasukkan di sini langsung <code>approved</code> — ikut di putaran pipeline berikutnya.</span>
-    <a href="{{ route('posts') }}" class="ml-auto underline">semua post</a>
-    <a href="{{ route('search') }}" class="underline">ke daftar paket</a>
-</div>
-
 {{-- Panel pipeline: cuma pemantau + tombol batal. Yang mengantrikan job itu tombol
      scrap di tabel bawah (atau `packages:crawl`), yang mengerjakan `queue:work`. --}}
 <div class="mb-3 rounded border border-stone-200 bg-white px-3 py-2 text-xs">

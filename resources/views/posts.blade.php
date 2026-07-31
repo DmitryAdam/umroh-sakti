@@ -114,7 +114,7 @@
                                 @foreach ($post['images'] as $src)
                                     <a href="{{ $src }}" target="_blank" rel="noopener">
                                         <img src="{{ $src }}" alt="slide {{ $loop->index }}" loading="lazy"
-                                             class="h-16 w-16 rounded border border-stone-100 bg-stone-50 object-cover">
+                                             class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
                                     </a>
                                 @endforeach
                             </div>
@@ -154,7 +154,10 @@
                             {{-- Klik = caption penuh. <details> bawaan, tanpa JS: teksnya
                                  dirender sekali, yang berubah cuma clamp-nya saat open. --}}
                             <details class="group max-w-xl">
-                                <summary class="line-clamp-2 block cursor-pointer list-none whitespace-pre-line text-stone-600 group-open:line-clamp-none">{{ $post['caption'] }}</summary>
+                                {{-- Tanpa `block`: utility itu dirender SESUDAH `line-clamp-2`
+                                     di bundel, jadi `display:block` menimpa `-webkit-box`
+                                     dan clamp-nya mati — captionnya tampil penuh. --}}
+                                <summary class="line-clamp-2 cursor-pointer list-none whitespace-pre-line text-stone-600 group-open:line-clamp-none">{{ $post['caption'] }}</summary>
                             </details>
                         @endif
                         <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-stone-400">

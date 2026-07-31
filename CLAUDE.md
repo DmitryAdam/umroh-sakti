@@ -792,6 +792,14 @@ sudah memastikan tidak ada worker lain hidup, jadi reservasi yang tersisa pasti 
 carousel ke vision + penyusun), dan menurunkannya bikin job yang masih jalan diambil
 worker kedua.
 
+**`DB_QUEUE_RETRY_AFTER` dijepit dua arah, 1200 itu titik tengahnya.** Batas
+bawahnya timeout job terpanjang (`FetchAccount` = 900s): di bawah itu queue
+menganggap job yang masih jalan sudah mati lalu menyerahkannya ke worker lain —
+fetch/extract jalan dobel. Batas atasnya angka yang sama dibaca terbalik: ini
+**sekaligus** berapa lama job yang workernya mati ikut beku sebelum direbut ulang.
+7200 pernah bikin tiga job `ai` nganggur 2 jam padahal `ai` tidak kena rate limit
+apa pun.
+
 Job yang **sedang** dikerjakan tetap selesai — barisnya masih ada di `jobs` dengan
 `reserved_at` terisi, dihapus lebih awal saja, dan `delete()` worker sesudahnya jadi
 no-op. Makanya `antrian_per.{q}` memisah `antri` (`reserved_at is null`) dari `proses`:
@@ -1130,6 +1138,11 @@ langsung ke file, bukan lewat stdout worker.
 
 Redis/Horizon belum dipasang; queue pakai driver `database` (jalankan
 `php artisan queue:work`).
+
+**`LOG_STACK=daily`, bukan `single`.** Channel `single` tidak pernah dirotasi sama
+sekali: `laravel.log` pernah tembus 2,6 GB — lebih berat dari seluruh `storage/raw`
+saat itu — karena satu stacktrace yang berulang. `daily` bikin file per hari dan
+menghapus yang lebih tua dari `LOG_DAILY_DAYS` (3) tiap kali menulis.
 
 ## Alur kerja
 

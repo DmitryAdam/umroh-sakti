@@ -96,9 +96,11 @@
          teks — bar filternya sticky pakai `-mx-4` yang bergantung ke padding ini. --}}
     {{-- pt kecil: bar cari di `/` sudah punya padding sendiri dan sticky tepat di
          bawah header — pt-6 di sini bikin jarak header ke bar menganga. --}}
-    <main class="px-4 pb-8 pt-3">@yield('content')</main>
+    {{-- pb besar: footernya fixed, jadi kartu terakhir perlu ruang supaya tidak
+         tertutup — 2 baris di layar sempit. --}}
+    <main class="px-4 pb-24 pt-3">@yield('content')</main>
 
-    <footer class="px-4 py-8 text-xs text-muted-foreground">
+    <footer class="fixed inset-x-0 bottom-0 z-40 border-t bg-background/85 px-4 py-3 text-xs text-muted-foreground backdrop-blur">
         Data dikumpulkan dari postingan publik travel. Selalu konfirmasi ke travel
         bersangkutan sebelum melakukan pembayaran.
     </footer>

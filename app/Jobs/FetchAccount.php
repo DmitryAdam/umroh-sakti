@@ -95,9 +95,16 @@ class FetchAccount implements ShouldQueue
 
             // Rate limit bukan kesalahan akun ini — tunggu, jangan tandai gagal.
             // Semua app sudah dicoba sebelum probe.php melempar ini (lihat igCreds).
+            //
+            // `last_error` sengaja TIDAK ditulis: job ini masih antri (release 300),
+            // jadi ini keadaan menunggu, bukan vonis. Kalau distempel, akun yang
+            // fetch terakhirnya berhasil tetap memajang "gagal: semua app kena rate
+            // limit" — dan stempelnya nyangkut selamanya begitu job yang menunggu itu
+            // dibuang (tombol batal di panel) atau retryUntil 2 jam habis, karena yang
+            // menghapusnya cuma fetch berikutnya yang berhasil. Jejaknya di
+            // storage/pipeline.jsonl, tempat keadaan sementara memang dicatat.
             if (str_contains($error, 'rate limit')) {
                 PipelineLog::write('ig', "@{$this->account->username}: rate limit, coba lagi 5 menit");
-                $this->account->update(['last_error' => 'semua app kena rate limit — antri lagi tiap 5 menit']);
                 $this->release(300);
 
                 return;
