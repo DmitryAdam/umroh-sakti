@@ -2,156 +2,163 @@
 @section('title', 'Cari Paket Umroh')
 
 @section('content')
-{{-- Sudah login: semua status tampil apa adanya, tanpa spanduk — yang sudah
-     dibuang lewat × memang hilang dari tabel. Toggle `?all=0` untuk melihat
-     persis seperti yang dilihat pengunjung. --}}
-@unless ($preview ?? false)
-    <p class="mb-4 text-sm text-muted-foreground">Cuma paket published yang tampil.</p>
-@endunless
-
-@if ($preview ?? false)
-    {{-- Panel pipeline pindah ke /akun: halaman ini khusus buat mencari paket. --}}
-    <p class="mb-4 text-sm text-muted-foreground">
-        Pratinjau operator. <a href="{{ route('accounts') }}" class="font-medium text-foreground underline underline-offset-4">daftar akun &amp; pipeline</a>
-        &middot; <a href="{{ request()->fullUrlWithQuery(['all' => 0]) }}" class="underline underline-offset-4">lihat sebagai pengunjung</a>
-    </p>
-@endif
-
+{{-- Tanpa spanduk: peran + saklar pratinjau ada di menu (layout.blade), dan
+     halaman ini isinya hasil pencarian. Yang membedakan pratinjau dari tampilan
+     pengunjung sudah kelihatan sendiri — kartu non-published dan tombol aksinya. --}}
 @php
     // Label + ikon select facet. Kuncinya = param query di PackageSearchController::FACETS.
+    // Labelnya kalimat penuh: di popover tiap kontrol punya caption sendiri, jadi
+    // "kota" saja tidak cukup menjelaskan kota berangkat vs kota tujuan.
     $labelFacet = [
-        'city' => ['pin', 'kota'],
-        'airline' => ['plane', 'maskapai'],
-        'account' => ['at', 'akun'],
-        'extension' => ['plus', 'extension'],
-        'certainty' => ['help', 'kepastian'],
-        'status' => ['tag', 'status'],
+        'city' => ['pin', 'Kota keberangkatan'],
+        'airline' => ['plane', 'Maskapai'],
+        'account' => ['at', 'Akun travel'],
+        'extension' => ['plus', 'Extension'],
+        'certainty' => ['help', 'Kepastian tanggal'],
+        'status' => ['tag', 'Status publikasi'],
     ];
     // Semua yang bukan urutan/pratinjau dihitung sebagai filter aktif.
     $aktif = array_filter(request()->except(['sort', 'all']), fn ($v) => is_scalar($v) && $v !== '');
 
-    // Kontrolnya dipadatkan jadi "pill": satu kotak setinggi 8 berisi ikon + kontrol
-    // tanpa border sendiri, jadi labelnya tidak perlu baris sendiri. Bukan x-ui.input/
-    // select karena dua-duanya h-9 + border, tiga barisnya bikin bar-nya setinggi kartu.
-    $pill = 'inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2 text-xs '
+    // Kontrolnya dipadatkan jadi "pill": satu kotak berisi ikon + kontrol tanpa
+    // border sendiri. Bukan x-ui.input karena captionnya sudah di atas kontrol.
+    $pill = 'inline-flex h-9 items-center gap-1.5 rounded-xl border border-input bg-background px-2.5 text-xs '
         .'shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50';
     $bare = 'min-w-0 cursor-pointer bg-transparent text-xs outline-none placeholder:text-muted-foreground';
+    // Caption tiap filter: ikon + teks di atas kontrolnya.
+    $caption = 'flex items-center gap-1.5 text-xs font-medium text-foreground';
     // Tombol aksi per kartu (pratinjau lokal). Semuanya sebaris di bawah gambar,
     // tooltipnya `title` bawaan browser — tidak perlu library.
     $aksi = 'grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50';
 @endphp
 
-{{-- Satu form GET untuk filter + urutan sekaligus. Sticky di bawah header (h-14)
-     supaya bisa ganti filter tanpa scroll balik ke atas; `-mx-4 px-4` bikin
-     latarnya penuh selebar main yang punya padding 4. --}}
-<form method="GET" action="{{ route('search') }}"
-      class="sticky top-14 z-30 -mx-4 mb-4 flex flex-wrap items-center gap-2 border-b bg-background/90 px-4 py-2 backdrop-blur">
+{{-- Bar cari duduk DI DALAM header (`@section('bar')`, dirender layout di baris
+     yang sama dengan logo & burger). Dulu ia baris sticky sendiri di bawah header:
+     dua baris menempel yang sama-sama sticky memakan sepertiga layar sebelum kartu
+     pertama kelihatan. Sticky-nya sekarang ikut header, jadi form ini tidak perlu
+     posisi sendiri — cukup mengisi lebar yang disediakan. --}}
+@section('bar')
+<form method="GET" action="{{ route('search') }}" class="w-full">
     @if (request()->has('all'))<input type="hidden" name="all" value="{{ request('all') }}">@endif
 
-    <label class="{{ $pill }} w-full flex-1 sm:w-auto sm:max-w-sm">
-        <x-ui.icon name="search" class="text-muted-foreground" />
-        <input name="q" value="{{ request('q') }}" placeholder="hotel, pembimbing, kota, maskapai…"
-               class="{{ $bare }} w-full cursor-text">
-    </label>
+    <div class="flex flex-wrap items-center gap-2">
+        <label class="flex h-10 w-full min-w-0 flex-1 items-center gap-2 rounded-xl border border-input bg-background px-3 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 sm:w-auto">
+            <x-ui.icon name="search" class="!size-4 text-muted-foreground" />
+            <input name="q" value="{{ request('q') }}" placeholder="hotel, pembimbing, kota, maskapai…"
+                   class="h-full w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground">
+        </label>
 
-    {{-- Urutan digabung ke bar filter: satu select, bukan empat tombol. --}}
-    <label class="{{ $pill }}" title="urut">
-        <x-ui.icon name="sort" class="text-muted-foreground" />
-        <select name="sort" onchange="this.form.submit()" class="{{ $bare }} appearance-none pr-1">
-            @foreach (App\Http\Controllers\PackageSearchController::SORTS as $key => $label)
-                <option value="{{ $key }}" @selected($sort === $key)>{{ $label }}</option>
-            @endforeach
-        </select>
-    </label>
+        {{-- Urutan digabung ke bar filter: satu combo, bukan empat tombol. --}}
+        <x-ui.combo name="sort" icon="sort" size="lg" submit placeholder="urutkan"
+                    :value="$sort" :options="App\Http\Controllers\PackageSearchController::SORTS" />
 
-    {{-- Filter sisanya di popover <details>: tetap satu form, tanpa JS. --}}
-    <details class="relative">
-        <summary class="{{ $pill }} cursor-pointer select-none gap-1.5 font-medium marker:content-none [&::-webkit-details-marker]:hidden">
-            <x-ui.icon name="filter" />
-            filter
-            @if ($aktif)<x-ui.badge variant="default">{{ count($aktif) }}</x-ui.badge>@endif
-        </summary>
+        {{-- Filter sisanya di popover <details>: tetap satu form. --}}
+        <details class="relative">
+            <summary class="flex h-10 cursor-pointer select-none items-center gap-1.5 rounded-xl border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent/40 marker:content-none [&::-webkit-details-marker]:hidden">
+                <x-ui.icon name="filter" />
+                filter
+                @if ($aktif)<x-ui.badge variant="default">{{ count($aktif) }}</x-ui.badge>@endif
+            </summary>
 
-        <x-ui.card class="absolute left-0 top-full z-40 mt-2 grid w-[min(34rem,88vw)] gap-3 p-3 sm:grid-cols-2">
-            @foreach ($facets as $param => $pilihan)
-                {{-- Kolom dengan satu nilai saja tidak perlu select (status saat publik). --}}
-                @continue (count($pilihan) < 2)
-                <label class="{{ $pill }} w-full">
-                    <x-ui.icon :name="$labelFacet[$param][0]" class="text-muted-foreground" />
-                    {{-- Daftar panjang (akun ~190, maskapai belasan ejaan) tidak bisa
-                         dipindai mata: <input list> + <datalist> itu combobox
-                         ketik-untuk-menyaring bawaan browser, tanpa JS. Nilainya tetap
-                         harus persis — ketikan bebas yang tidak ada di daftar balik nol
-                         hasil, sama seperti memilih opsi yang tidak ada. Daftar pendek
-                         (status, kepastian) tetap select: menu 3 opsi tidak perlu dicari. --}}
-                    @if ($pilihan->count() > 8)
-                        <input name="{{ $param }}" value="{{ request($param) }}" list="facet-{{ $param }}"
-                               onchange="this.form.submit()" placeholder="{{ $labelFacet[$param][1] }}: semua ({{ $pilihan->sum() }})"
-                               class="{{ $bare }} w-full cursor-text">
-                        <datalist id="facet-{{ $param }}">
-                            @foreach ($pilihan as $nilai => $jumlah)
-                                <option value="{{ $nilai }}" label="{{ $jumlah }}"></option>
-                            @endforeach
-                        </datalist>
-                    @else
-                        <select name="{{ $param }}" onchange="this.form.submit()" class="{{ $bare }} w-full appearance-none">
-                            <option value="">{{ $labelFacet[$param][1] }}: semua ({{ $pilihan->sum() }})</option>
-                            @foreach ($pilihan as $nilai => $jumlah)
-                                <option value="{{ $nilai }}" @selected(request($param) === (string) $nilai)>{{ $nilai }} ({{ $jumlah }})</option>
-                            @endforeach
-                        </select>
-                    @endif
-                </label>
-            @endforeach
-
-            <label class="{{ $pill }} w-full" title="berangkat">
-                <x-ui.icon name="calendar" class="text-muted-foreground" />
-                <input type="date" name="from" value="{{ request('from') }}" min="{{ config('umroh.min_departure') }}" class="{{ $bare }} w-full">
-                <span class="text-muted-foreground">–</span>
-                <input type="date" name="to" value="{{ request('to') }}" min="{{ config('umroh.min_departure') }}" class="{{ $bare }} w-full">
-            </label>
-
-            <label class="{{ $pill }} w-full" title="durasi (hari)">
-                <x-ui.icon name="clock" class="text-muted-foreground" />
-                @foreach (['duration_min' => 'min', 'duration_max' => 'maks'] as $param => $label)
-                    <select name="{{ $param }}" onchange="this.form.submit()" class="{{ $bare }} w-full appearance-none">
-                        <option value="">{{ $label }} hari</option>
-                        @foreach ($durations as $hari)
-                            <option value="{{ $hari }}" @selected(request($param) == $hari)>{{ $hari }}</option>
-                        @endforeach
-                    </select>
+            <x-ui.card class="absolute right-0 top-full z-40 mt-2 grid w-[min(40rem,88vw)] gap-4 p-4 sm:grid-cols-2">
+                @foreach ($facets as $param => $pilihan)
+                    {{-- Kolom dengan satu nilai saja tidak perlu select (status saat publik). --}}
+                    @continue (count($pilihan) < 2)
+                    <div class="grid gap-1.5">
+                        <span class="{{ $caption }}"><x-ui.icon :name="$labelFacet[$param][0]" class="text-primary" /> {{ $labelFacet[$param][1] }}</span>
+                        {{-- Jumlah per pilihan ikut di labelnya; daftar panjang (akun ~190,
+                             maskapai belasan ejaan) dapat kotak cari dari x-ui.combo. --}}
+                        <x-ui.combo :name="$param" submit :value="request($param)"
+                                    placeholder="semua ({{ $pilihan->sum() }})"
+                                    :options="$pilihan->mapWithKeys(fn ($jumlah, $nilai) => [$nilai => $nilai.' ('.$jumlah.')'])" />
+                    </div>
                 @endforeach
-            </label>
 
-            <label class="{{ $pill }} w-full" title="harga rupiah, kena ke tier mana saja">
-                <x-ui.icon name="money" class="text-muted-foreground" />
-                <input type="number" name="min_price" value="{{ request('min_price') }}" step="1000000" min="0" placeholder="min" class="{{ $bare }} w-full cursor-text">
-                <span class="text-muted-foreground">–</span>
-                <input type="number" name="max_price" value="{{ request('max_price') }}" step="1000000" min="0" placeholder="maks" class="{{ $bare }} w-full cursor-text">
-            </label>
+                <div class="grid gap-1.5">
+                    <span class="{{ $caption }}"><x-ui.icon name="calendar" class="text-primary" /> Tanggal keberangkatan</span>
+                    <label class="{{ $pill }} w-full">
+                        <input type="date" name="from" value="{{ request('from') }}" min="{{ config('umroh.min_departure') }}" class="{{ $bare }} w-full">
+                        <span class="text-muted-foreground">–</span>
+                        <input type="date" name="to" value="{{ request('to') }}" min="{{ config('umroh.min_departure') }}" class="{{ $bare }} w-full">
+                    </label>
+                </div>
 
-            <label class="{{ $pill }} w-full">
-                <x-ui.icon name="hotel" class="text-muted-foreground" />
-                <input name="hotel" value="{{ request('hotel') }}" placeholder="nama hotel" class="{{ $bare }} w-full cursor-text">
-            </label>
+                <div class="grid gap-1.5">
+                    <span class="{{ $caption }}"><x-ui.icon name="clock" class="text-primary" /> Durasi perjalanan</span>
+                    <div class="flex items-center gap-2">
+                        @foreach (['duration_min' => 'min', 'duration_max' => 'maks'] as $param => $label)
+                            <x-ui.combo :name="$param" submit :value="request($param)" placeholder="{{ $label }} hari"
+                                        class="flex-1"
+                                        :options="collect($durations)->mapWithKeys(fn ($hari) => [$hari => $hari.' hari'])" />
+                        @endforeach
+                    </div>
+                </div>
 
-            <div class="flex items-center justify-end gap-2 sm:col-span-2">
-                @if ($aktif)
-                    <x-ui.button as="a" variant="ghost" size="sm"
-                                 href="{{ request()->fullUrlWithQuery(array_map(fn () => null, $aktif)) }}">
-                        <x-ui.icon name="x" /> reset
-                    </x-ui.button>
-                @endif
-                <x-ui.button size="sm">Terapkan</x-ui.button>
-            </div>
-        </x-ui.card>
-    </details>
+                <div class="grid gap-1.5">
+                    <span class="{{ $caption }}" title="kena ke tier mana saja"><x-ui.icon name="money" class="text-primary" /> Harga (rupiah)</span>
+                    <label class="{{ $pill }} w-full">
+                        <input type="number" name="min_price" value="{{ request('min_price') }}" step="1000000" min="0" placeholder="min" class="{{ $bare }} w-full cursor-text">
+                        <span class="text-muted-foreground">–</span>
+                        <input type="number" name="max_price" value="{{ request('max_price') }}" step="1000000" min="0" placeholder="maks" class="{{ $bare }} w-full cursor-text">
+                    </label>
+                </div>
 
-    <span class="ml-auto text-xs text-muted-foreground"><span data-count>{{ $packages->count() }}</span> paket</span>
+                <div class="grid gap-1.5">
+                    <span class="{{ $caption }}"><x-ui.icon name="hotel" class="text-primary" /> Nama hotel</span>
+                    <label class="{{ $pill }} w-full">
+                        <input name="hotel" value="{{ request('hotel') }}" placeholder="Makkah atau Madinah" class="{{ $bare }} w-full cursor-text">
+                    </label>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 sm:col-span-2">
+                    @if ($aktif)
+                        <x-ui.button as="a" variant="ghost" size="sm"
+                                     href="{{ request()->fullUrlWithQuery(array_map(fn () => null, $aktif)) }}">
+                            <x-ui.icon name="x" /> reset
+                        </x-ui.button>
+                    @endif
+                    <x-ui.button size="sm">Terapkan</x-ui.button>
+                </div>
+            </x-ui.card>
+        </details>
+
+        {{-- Reset di bar, bukan cuma di dalam popover: kata cari + facet bisa aktif
+             tanpa popover pernah dibuka, jadi jalan keluarnya harus kelihatan dari
+             luar. Link biasa (query param yang aktif di-null-kan), bukan tombol —
+             GET tanpa JS, dan bisa dibuka di tab baru. --}}
+        @if ($aktif)
+            <x-ui.button as="a" variant="outline"
+                         class="h-10 rounded-xl px-3 text-sm"
+                         href="{{ request()->fullUrlWithQuery(array_map(fn () => null, $aktif)) }}"
+                         title="Hapus semua filter &amp; kata cari"
+            ><x-ui.icon name="x" /> reset</x-ui.button>
+        @endif
+
+        {{-- Tampilan & jumlah kolom: preferensi tampilan, bukan filter — tidak
+             ikut query string, disimpan di localStorage (lihat JS di bawah). --}}
+        <div class="flex h-10 items-center gap-1 rounded-xl border border-input bg-background px-1 shadow-xs">
+            @foreach (['grid' => ['grid', 'tampilan kartu'], 'list' => ['list', 'tampilan daftar']] as $mode => $ikon)
+                <button type="button" data-view-set="{{ $mode }}" title="{{ $ikon[1] }}"
+                        class="grid size-8 cursor-pointer place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-primary aria-pressed:text-primary-foreground">
+                    <x-ui.icon :name="$ikon[0]" class="!size-4" />
+                </button>
+            @endforeach
+        </div>
+
+        <x-ui.combo store="cols" icon="columns" size="lg" placeholder="kolom: auto"
+                    class="hidden lg:block"
+                    :options="collect(range(1, 8))->mapWithKeys(fn ($n) => [$n => $n.' kolom'])" />
+    </div>
 </form>
+@endsection
 
-{{-- Maksimal 8 kolom di layar lebar; di bawah itu jumlahnya turun per breakpoint. --}}
-<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 min-[1800px]:grid-cols-8">
+{{-- Jumlah hasil pindah keluar bar: di header ia berebut tempat dengan kontrol
+     yang benar-benar diklik. --}}
+<p class="mb-3 text-xs text-muted-foreground"><span data-count>{{ $packages->count() }}</span> paket</p>
+
+{{-- Maksimal 8 kolom di layar lebar; di bawah itu jumlahnya turun per breakpoint.
+     Pilihan manual dipasang inline dari JS, jadi menimpa semua breakpoint. --}}
+<div id="grid" data-view="grid" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 min-[1800px]:grid-cols-8">
     @forelse ($packages as $package)
         @php $flyers = $package->flyers(); @endphp   {{-- sudah disaring ke gambar yang memuat detail paket --}}
         {{-- Seluruh kartu membuka lightbox (lihat JS di bawah), bukan cuma judulnya.
@@ -160,8 +167,9 @@
         <x-ui.card as="article" id="p{{ $package->id }}"
                    class="relative flex cursor-pointer scroll-mt-20 flex-col overflow-hidden transition-shadow hover:shadow-md">
             @if ($flyers)
-                {{-- Carousel pakai scroll-snap bawaan browser: geser/swipe, tanpa JS. --}}
-                <div class="relative bg-muted">
+                {{-- Carousel pakai scroll-snap bawaan browser: geser/swipe, tanpa JS.
+                     `data-flyer` dipakai CSS tampilan daftar buat menaruhnya di kolom kiri. --}}
+                <div data-flyer class="relative bg-muted">
                     <div class="flex snap-x snap-mandatory overflow-x-auto">
                         @foreach ($flyers as $url)
                             <img src="{{ $url }}" alt="Flyer dari &#64;{{ $package->source_account }}" loading="lazy"
@@ -176,8 +184,10 @@
 
             @if ($preview ?? false)
                 {{-- Aksi kartu, semuanya di bawah gambar. `data-gone` = barisnya
-                     hilang setelah aksi (baca ulang bikin baris baru saat import). --}}
-                <div class="flex items-center gap-1 border-b bg-muted/40 px-2 py-1">
+                     hilang setelah aksi (baca ulang bikin baris baru saat import).
+                     `data-aksi`/`data-isi` dipakai CSS tampilan daftar: di sana yang
+                     duduk di samping gambar harus teksnya, bukan bar tombol ini. --}}
+                <div data-aksi class="flex items-center gap-1 border-b bg-muted/40 px-2 py-1">
                     <button type="button" data-post="{{ route('package.reextract', $package) }}" data-gone
                             title="Baca ulang pakai AI — gambarnya dikirim lagi ke vision, paketnya disusun & diklasifikasi ulang"
                             class="{{ $aksi }}"><x-ui.icon name="sparkles" /></button>
@@ -199,7 +209,7 @@
                 </div>
             @endif
 
-            <div class="flex flex-1 flex-col gap-1 p-3 text-sm">
+            <div data-isi class="flex flex-1 flex-col gap-1 p-3 text-sm">
                 {{-- Lightbox: href-nya tetap halaman detail, jadi tanpa JS / klik-tengah
                      tetap jalan. Yang di-klik biasa dicegat dan diambil lewat fetch. --}}
                 <a href="{{ route('package.show', ['package' => $package] + (($preview ?? false) ? ['all' => 1] : [])) }}"
@@ -226,7 +236,7 @@
                     <dl class="mt-1 grid grid-cols-[auto_1fr] items-baseline gap-x-2">
                         @foreach ($harga as $occupancy => $amount)
                             <dt class="text-xs capitalize text-muted-foreground">{{ $occupancy }}</dt>
-                            <dd class="text-right font-medium tabular-nums">
+                            <dd class="text-right font-medium tabular-nums text-accent2">
                                 {{ number_format($amount / 1000000, 1, ',', '.') }} jt
                                 @if ($package->price_starting_from)<span class="text-[10px] font-normal text-muted-foreground">mulai</span>@endif
                             </dd>
@@ -262,16 +272,9 @@
                     <a href="{{ $package->source_permalink }}" rel="nofollow noopener" target="_blank"
                        class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground underline underline-offset-4 @if (! $package->source_permalink) pointer-events-none opacity-50 @endif"
                     ><x-ui.icon name="at" /><span class="truncate">{{ $package->source_account ?? '-' }}</span></a>
-                    @if ($package->source_account)
-                        {{-- Saring ke akun ini saja — facet `akun` yang sama dengan select di atas,
-                             jadi klik kedua kalinya melepas filternya. --}}
-                        @php($terpilih = request('account') === $package->source_account)
-                        <x-ui.button as="a" variant="{{ $terpilih ? 'secondary' : 'ghost' }}" size="sm"
-                                     class="h-6 px-1.5"
-                                     href="{{ request()->fullUrlWithQuery(['account' => $terpilih ? null : $package->source_account]) }}"
-                                     title="{{ $terpilih ? 'Hapus filter akun' : 'Tampilkan paket dari akun ini saja' }}"
-                        ><x-ui.icon name="filter" class="!size-3.5" /></x-ui.button>
-                    @endif
+                    {{-- Tombol "saring ke akun ini" dibuang: facet `Akun travel` di
+                         popover filter sudah bisa dicari, dan tombol per kartu bikin
+                         baris akun ramai tanpa menambah jalan yang belum ada. --}}
                     @if ($package->reposts)
                         <x-ui.badge variant="outline">+{{ count($package->reposts) }} repost</x-ui.badge>
                     @endif
@@ -285,7 +288,7 @@
         </x-ui.card>
     @empty
         <p class="col-span-full rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-            Belum ada paket. Jalankan fetch &rarr; extract &rarr; packages:import.
+            Tidak ada hasil
         </p>
     @endforelse
 </div>
@@ -301,6 +304,43 @@
 </dialog>
 
 <script>
+// Tampilan kartu/daftar + jumlah kolom. Preferensi tampilan, bukan filter: tidak
+// masuk query string (link yang dibagikan tidak boleh memaksa tata letak orang
+// lain), disimpan di localStorage. Kolomnya dipasang inline supaya menimpa kelas
+// breakpoint; tampilan daftar mengabaikan pilihan kolom (selalu satu).
+const grid = document.getElementById('grid');
+const kolomCombo = document.querySelector('[data-store=cols]');
+let tampilan = localStorage.getItem('view') ?? 'grid';
+let kolom = localStorage.getItem('cols') ?? '';
+
+function terapkanTampilan() {
+    grid.dataset.view = tampilan;
+    // Pilihan kolom berlaku di dua tampilan. Auto: kartu ikut kelas breakpoint
+    // (kelas dilepas dengan mengosongkan inline style), daftar pakai auto-fill
+    // 24rem — baris daftar butuh lebar minimum, bukan 8 kolom seperti kartu.
+    grid.style.gridTemplateColumns = kolom ? `repeat(${kolom}, minmax(0, 1fr))`
+        : (tampilan === 'list' ? 'repeat(auto-fill, minmax(24rem, 1fr))' : '');
+    document.querySelectorAll('[data-view-set]').forEach((b) =>
+        b.setAttribute('aria-pressed', b.dataset.viewSet === tampilan));
+}
+
+document.addEventListener('click', (event) => {
+    const tombol = event.target.closest('[data-view-set]');
+    if (!tombol) return;
+    tampilan = tombol.dataset.viewSet;
+    localStorage.setItem('view', tampilan);
+    terapkanTampilan();
+});
+
+kolomCombo.addEventListener('change', () => {
+    kolom = kolomCombo.value;
+    localStorage.setItem('cols', kolom);
+    terapkanTampilan();
+});
+
+comboPilih(kolomCombo, kolom);   // label combo ikut nilai yang tersimpan
+terapkanTampilan();
+
 const lightbox = document.getElementById('lightbox');
 const lightboxBody = lightbox.querySelector('[data-body]');
 
@@ -330,32 +370,10 @@ document.addEventListener('click', async (event) => {
 </script>
 
 @if ($preview ?? false)
+{{-- Select status: satu partial, dipakai juga di kolom status /posts. --}}
+@include('partials.status-patch')
 <script>
 const csrf = document.querySelector('meta[name=csrf-token]').content;
-
-// Ganti status = satu PATCH, tanpa reload: kalau halamannya dimuat ulang, filter
-// `?status=review` yang sedang dipakai langsung membuang kartu yang baru dipublish
-// dari layar — dan yang di sebelahnya ikut bergeser di tengah kerja.
-document.addEventListener('change', async (event) => {
-    const select = event.target.closest('[data-status]');
-    if (!select) return;
-
-    select.disabled = true;
-    try {
-        const res = await fetch(select.dataset.status, {
-            method: 'PATCH',
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf },
-            body: JSON.stringify({ status: select.value }),
-        });
-        if (!res.ok) throw new Error(res.status);
-        select.classList.remove('border-destructive');
-        select.title = 'tersimpan: ' + select.value;
-    } catch (e) {
-        select.classList.add('border-destructive');
-        select.title = 'gagal simpan: ' + e.message;
-    }
-    select.disabled = false;
-});
 
 document.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-delete], [data-post]');

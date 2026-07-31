@@ -16,23 +16,32 @@
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
+    /* Warna merek: #8e2157. Diisi hex apa adanya — Tailwind v4 tidak peduli
+       ruang warnanya, dan hex-nya yang dipegang orang saat menyamakan aset. */
+    --primary: #8e2157;
     --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --secondary: #fbeef4;
+    --secondary-foreground: #8e2157;
+    --muted: oklch(0.97 0.004 340);
+    --muted-foreground: oklch(0.53 0.02 340);
+    --accent: #fbeef4;
+    --accent-foreground: #8e2157;
+    /* Aksen kedua (emas) — dipakai untuk angka harga & penanda repost supaya
+       tidak semuanya merah. Bukan pengganti destructive. */
+    --accent2: #a97016;
+    --accent2-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.577 0.245 27.325);
     --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --border: oklch(0.92 0.008 340);
+    --input: oklch(0.9 0.01 340);
+    --ring: #8e2157;
 }
 
 @theme inline {
     --font-sans: Inter, ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+    /* Cuma untuk logo (`font-display`). Lalezar itu Latin bergaya khat Arab —
+       tidak dipakai untuk isi halaman: angka & tabelnya jadi tidak terbaca. */
+    --font-display: Lalezar, var(--font-sans);
 
     --color-background: var(--background);
     --color-foreground: var(--foreground);
@@ -48,6 +57,8 @@
     --color-muted-foreground: var(--muted-foreground);
     --color-accent: var(--accent);
     --color-accent-foreground: var(--accent-foreground);
+    --color-accent2: var(--accent2);
+    --color-accent2-foreground: var(--accent2-foreground);
     --color-destructive: var(--destructive);
     --color-destructive-foreground: var(--destructive-foreground);
     --color-border: var(--border);
@@ -68,4 +79,59 @@
         background-color: var(--background);
         color: var(--foreground);
     }
+}
+
+/* Tampilan daftar: flyer jadi kolom kiri setinggi kartu, bar aksi + isi menumpuk
+   di kolom kanan. Grid, bukan flex-row — bar aksi dan isi itu dua elemen bersaudara
+   yang harus menumpuk di kolom yang sama. Jumlah kolomnya sendiri diatur inline
+   dari JS (localStorage), jadi tidak ada kelas per pilihan yang perlu di-generate. */
+[data-view='list'] article {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    align-items: stretch;
+}
+
+/* Kartu tanpa flyer (baris lama tanpa flyer_index) tidak boleh menyisakan kolom
+   kiri kosong. */
+[data-view='list'] article:not(:has([data-flyer])) {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+/* Teksnya harus boleh menyusut: grid item default `min-width: auto`, dan tanpa
+   ini `truncate` di nama hotel/maskapai melar keluar kartu. */
+[data-view='list'] article > * {
+    min-width: 0;
+}
+
+/* Flyer setinggi kartu di kolom kiri. `contain` menyisakan pita kosong atas-bawah
+   begitu tingginya ikut isi teks — di daftar yang dipindai cepat isian penuh lebih
+   terbaca daripada flyer utuh yang mengecil. */
+/* `span 2`, bukan `1 / -1`: barisnya implisit (dibuat oleh penempatan di bawah),
+   dan indeks negatif dihitung dari grid eksplisit yang cuma satu baris. */
+[data-view='list'] [data-flyer] {
+    grid-row: 1 / span 2;
+}
+
+/* Yang duduk di samping gambar itu teksnya. Bar tombol (pratinjau operator) turun
+   ke bawah teks — auto-placement menaruhnya di baris pertama karena markupnya
+   memang di atas, dan itu bikin kolom kanan dibuka oleh deretan tombol. */
+[data-view='list'] [data-isi] {
+    grid-row: 1;
+}
+
+[data-view='list'] [data-aksi] {
+    grid-row: 2;
+    border-bottom: 0;
+    border-top: 1px solid var(--border);
+}
+
+[data-view='list'] [data-flyer],
+[data-view='list'] [data-flyer] > div {
+    height: 100%;
+}
+
+[data-view='list'] [data-flyer] img {
+    aspect-ratio: auto;
+    height: 100%;
+    object-fit: cover;
 }

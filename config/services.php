@@ -16,6 +16,19 @@ return [
 
     // Kredensial LLM tidak di sini: probe.php baca .env langsung, Laravel tidak ikut.
 
+    /*
+     * Satu-satunya gerbang login. `redirect` biasanya boleh kosong — controllernya
+     * memakai route('login.callback') yang sudah benar selama APP_URL benar. Isi
+     * env-nya cuma kalau URL yang didaftarkan di Google Cloud Console beda (proxy
+     * yang menulis ulang path, domain kedua): Google mencocokkan string persis,
+     * jadi selisih satu slash pun ditolak sebagai redirect_uri_mismatch.
+     */
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI'),
+    ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],

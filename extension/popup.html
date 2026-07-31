@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body { width: 340px; margin: 0; padding: 12px; font: 13px/1.45 system-ui, sans-serif; }
+  h1 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  #status { margin: 0 0 10px; color: color-mix(in srgb, currentColor 60%, transparent); }
+  #status.gagal { color: #dc2626; }
+  #status.oke { color: #16a34a; }
+  label { display: grid; gap: 3px; margin-bottom: 8px; font-size: 11px;
+          color: color-mix(in srgb, currentColor 60%, transparent); }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit;
+                    color: inherit; background: transparent; border: 1px solid #8884; border-radius: 6px; }
+  textarea { resize: vertical; }
+  #thumbs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  #thumbs img { width: 56px; height: 56px; object-fit: cover; border: 1px solid #8884; border-radius: 6px; }
+  button { width: 100%; padding: 7px; font: inherit; font-weight: 500; cursor: pointer;
+           color: canvas; background: canvastext; border: 0; border-radius: 6px; }
+  button:disabled { opacity: .5; cursor: default; }
+  summary { cursor: pointer; font-size: 11px; margin-bottom: 4px;
+            color: color-mix(in srgb, currentColor 60%, transparent); }
+</style>
+
+<h1>Kirim post ke umroh-sakti</h1>
+<p id="status">Membaca post…</p>
+
+<form id="kirim" hidden>
+  <div id="thumbs"></div>
+
+  <label>Akun sumber
+    <input name="account" list="kandidat" required autocomplete="off">
+    <datalist id="kandidat"></datalist>
+  </label>
+
+  <label>Tanggal posting
+    <input type="date" name="posted_at" required>
+  </label>
+
+  <details>
+    <summary>Caption</summary>
+    <textarea name="caption" rows="5"></textarea>
+  </details>
+
+  <button>Simpan &amp; tutup</button>
+</form>
+
+<script src="popup.js"></script>

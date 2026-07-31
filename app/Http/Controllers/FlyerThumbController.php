@@ -28,7 +28,7 @@ class FlyerThumbController extends Controller
         $package = Package::where('media_id', $media)->where('flyer_index', $index)->first()
             ?? Package::where('media_id', $media)->firstOrFail();
         abort_unless(
-            $package->status === 'published' || $request->user() !== null,
+            $package->status === 'published' || $request->user()?->isAdmin(),
             404,
         );
 

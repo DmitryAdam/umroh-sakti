@@ -7,9 +7,11 @@ use App\Jobs\FetchAccount;
 use App\Models\Package;
 use App\Models\SourceAccount;
 use App\Support\ExcludedPost;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -45,10 +47,10 @@ class PackageSearchController extends Controller
     public function index(Request $request): View
     {
         // Pratinjau operator: lihat paket yang belum lolos review, plus tombol aksi
-        // per kartu. Default menyala kalau login (?all=0 untuk mematikan). Tamu
-        // tidak pernah dapat keduanya — jalur "publish tanpa review manusia" tetap
-        // tidak ada, yang berubah cuma kuncinya (login, bukan env local).
-        $preview = $request->user() !== null && $request->boolean('all', true);
+        // per kartu. Default menyala untuk admin (?all=0 untuk mematikan). Peran
+        // `user` dan tamu tidak pernah dapat keduanya — jalur "publish tanpa review
+        // manusia" tetap tidak ada, dan tombol aksinya toh 403 di route.
+        $preview = $request->user()?->isAdmin() && $request->boolean('all', true);
 
         $base = fn () => Package::query()->unless($preview, fn ($q) => $q->published());
 
@@ -138,8 +140,8 @@ class PackageSearchController extends Controller
      * yang sudah difilter: kalau ikut menyempit, memilih satu kota membuang semua
      * kota lain dari daftar dan pilihannya tidak bisa diganti tanpa reset.
      *
-     * @param  \Closure(): \Illuminate\Database\Eloquent\Builder  $base
-     * @return array<string, \Illuminate\Support\Collection<string, int>>
+     * @param  \Closure(): Builder  $base
+     * @return array<string, Collection<string, int>>
      */
     private function facets(\Closure $base): array
     {
@@ -311,8 +313,11 @@ class PackageSearchController extends Controller
 
     public function show(Package $package, Request $request): View
     {
+        // Yang belum published cuma untuk admin — peran `user` melihat portalnya
+        // persis seperti pengunjung, jadi jangan ada jalur detail yang membocorkan
+        // paket yang belum lolos review.
         abort_unless(
-            $package->status === 'published' || $request->user() !== null,
+            $package->status === 'published' || $request->user()?->isAdmin(),
             404,
         );
 

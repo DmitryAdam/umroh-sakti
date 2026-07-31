@@ -38,10 +38,20 @@ class ExtractPending implements ShouldBeUniqueUntilProcessing, ShouldQueue
             // unique per media_id, jadi dua pemindaian beruntun tidak bikin dobel.
             // Satu post bisa menghasilkan beberapa file (carousel dipecah per gambar),
             // jadi yang dicek pola namanya, bukan satu file.
-            if (glob(storage_path("extracted/$mediaId{.json,-*.json}"), GLOB_BRACE) === []) {
-                ExtractPost::dispatch($mediaId);
-                $antri++;
+            if (glob(storage_path("extracted/$mediaId{.json,-*.json}"), GLOB_BRACE) !== []) {
+                continue;
             }
+
+            // Usulan dari peran `user` menunggu approval admin: rawnya sudah ada,
+            // tapi belum boleh dibayar ke model. Penandanya `_suggested_by` di
+            // post.json, dan tombol "setujui" yang membuangnya. Dibaca cuma di
+            // cabang ini — post yang sudah punya hasil tidak perlu dibuka filenya.
+            if (str_contains((string) @file_get_contents($file), '"_suggested_by"')) {
+                continue;
+            }
+
+            ExtractPost::dispatch($mediaId);
+            $antri++;
         }
 
         PipelineLog::write('db', "pemindaian: $antri post belum diekstrak, masuk antrian ai");

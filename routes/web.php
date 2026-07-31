@@ -6,19 +6,22 @@ use App\Http\Controllers\FlyerThumbController;
 use App\Http\Controllers\PackageSearchController;
 use App\Http\Controllers\PipelineController;
 use App\Http\Controllers\PostController;
+use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
 /*
- * Dua lapis saja: publik dan operator.
+ * Tiga lapis: publik, user yang login, admin.
  *
- * Publik = pencarian paket published + thumbnailnya. Sisanya (alat kerja: daftar
- * akun, panel pipeline, tombol aksi per kartu, foto profil akun) ada di grup
- * `auth` di bawah. Gerbangnya login, bukan `app()->isLocal()` seperti dulu —
- * env sebagai kunci berarti alat kerjanya ikut mati begitu di-deploy.
+ * Publik = pencarian paket published + thumbnailnya.
+ * `auth` = usulan (akun/post yang belum kita lacak) — tidak menjalankan apa pun,
+ * cuma menyimpan dan menunggu approval.
+ * `auth` + `can:admin` = seluruh alat kerja: daftar akun, panel pipeline, review
+ * paket, approval usulan.
  *
  * Kuncinya di route, bukan di dalam tiap controller: satu tempat untuk dilihat,
  * dan method baru di controller yang sudah ada ikut terkunci tanpa perlu ingat
- * menambahkan `abort_unless`.
+ * menambahkan `abort_unless`. Gerbangnya login + peran, bukan `app()->isLocal()`
+ * seperti dulu — env sebagai kunci berarti alat kerjanya ikut mati begitu di-deploy.
  */
 
 /*
@@ -33,14 +36,39 @@ Route::get('/flyers/{media}/{index}.jpg', FlyerThumbController::class)
     ->whereNumber(['media', 'index'])
     ->name('flyer');
 
-// Namanya wajib `login`: itu yang dituju middleware `auth` saat menolak tamu.
+/*
+ * Login cuma satu jalur: Google SSO. Tidak ada form sandi, tidak ada pendaftaran
+ * terpisah — masuk pertama kali sekaligus membuat barisnya sebagai peran `user`.
+ *
+ * Namanya wajib `login`: itu yang dituju middleware `auth` saat menolak tamu.
+ */
 Route::get('/login', [AuthenticatedSessionController::class, 'create'])->name('login');
 // Throttle di sini, bukan di dalam controller: 5 percobaan per menit per IP.
-// Tanpa itu form sesederhana ini jadi tebakan sandi gratis.
 Route::post('/login', [AuthenticatedSessionController::class, 'store'])->middleware('throttle:5,1');
+// Google mengembalikan orangnya ke sini lewat GET; `state` di sesi yang menahan
+// permintaan yang bukan berasal dari tombol di /login.
+Route::get('/login/callback', [AuthenticatedSessionController::class, 'callback'])->name('login.callback');
 Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 
+/*
+ * Usulan: satu halaman, dua form (akun + post), dipakai kedua peran. Bedanya cuma
+ * akibatnya — kiriman admin langsung jalan, kiriman user menunggu approval. Itu
+ * ditentukan di controllernya, bukan di route kedua: jalur ganda berarti dua
+ * tempat yang bisa menyimpang.
+ */
 Route::middleware('auth')->group(function () {
+    Route::get('/suggestions', [PostController::class, 'create'])->name('suggestions');
+    Route::post('/accounts', [AccountController::class, 'store'])->name('accounts.store');
+    Route::post('/posts', [PostController::class, 'store'])->name('posts.store');
+    // Gambar mentah: dipakai daftar "usulan saya" untuk menampilkan kiriman sendiri.
+    Route::get('/posts/{media}/{index}.jpg', [PostController::class, 'raw'])
+        ->whereNumber(['media', 'index'])->name('posts.raw');
+    // Chrome extension, dirakit dari folder `extension/` saat diunduh. Di `auth`
+    // dan bukan `can:admin`: peran `user` juga mengirim post lewat alat ini.
+    Route::get('/extension.zip', [PostController::class, 'extension'])->name('extension');
+});
+
+Route::middleware(['auth', 'can:admin'])->group(function () {
     Route::post('/packages/{package}/feedback', [PackageSearchController::class, 'feedback'])->name('package.feedback');
     Route::delete('/packages/{package}', [PackageSearchController::class, 'destroy'])->name('package.destroy');
     Route::patch('/packages/{package}/status', [PackageSearchController::class, 'status'])->name('package.status');
@@ -48,7 +76,6 @@ Route::middleware('auth')->group(function () {
     Route::post('/packages/{package}/fetch', [PackageSearchController::class, 'refetch'])->name('package.refetch');
 
     Route::get('/accounts', [AccountController::class, 'index'])->name('accounts');
-    Route::post('/accounts', [AccountController::class, 'store'])->name('accounts.store');
     Route::post('/accounts/crawl', [AccountController::class, 'fetchAll'])->name('accounts.crawl');
     Route::post('/accounts/bulk', [AccountController::class, 'bulk'])->name('accounts.bulk');
     // Halaman post, dua ruang lingkup satu controller: seluruh akun dan satu akun.
@@ -56,11 +83,6 @@ Route::middleware('auth')->group(function () {
     // PostController mencari akunnya sendiri, jadi tombol yang sama jalan di dua
     // halaman itu tanpa jalur kedua.
     Route::get('/posts', [PostController::class, 'index'])->name('posts');
-    // Tambah post manual: yang tidak bisa dijangkau `fetch` (pinned lama, di luar
-    // --limit, akun yang belum di-scrap) dimasukkan lewat form — gambar + caption +
-    // permalink. Sesudahnya jalur normal: ExtractPost -> ImportPackages -> review.
-    Route::get('/posts/create', [PostController::class, 'create'])->name('posts.create');
-    Route::post('/posts', [PostController::class, 'store'])->name('posts.store');
     Route::get('/accounts/{account}/posts', [PostController::class, 'index'])->name('accounts.posts');
     // Aksi kelompok per post yang dicentang: `extract` (baca ulang) / `block`
     // (vonis manusia "bukan paket", baru di sini filenya dibuang) / `unblock`.
@@ -69,11 +91,14 @@ Route::middleware('auth')->group(function () {
     // lalu extract (ditolak kalau rawnya sudah dihapus).
     Route::post('/posts/{media}/extract', [PostController::class, 'reextract'])
         ->whereNumber('media')->name('posts.reextract');
-    Route::get('/posts/{media}/{index}.jpg', [PostController::class, 'raw'])
-        ->whereNumber(['media', 'index'])->name('posts.raw');
     Route::post('/accounts/{account}/fetch', [AccountController::class, 'fetch'])->name('accounts.fetch');
     Route::post('/accounts/{account}/block', [AccountController::class, 'block'])->name('accounts.block');
     Route::delete('/accounts/{account}', [AccountController::class, 'destroy'])->name('accounts.destroy');
+
+    // Daftar pengguna. Cuma tangguhkan/aktifkan — peran diubah lewat SQLite,
+    // sengaja: satu klik salah di sini = kuota Graph + tagihan model diserahkan.
+    Route::get('/users', [UserController::class, 'index'])->name('users');
+    Route::patch('/users/{user}', [UserController::class, 'update'])->name('users.update');
 
     Route::delete('/pipeline/queue/{queue?}', [PipelineController::class, 'clear'])->name('pipeline.clear');
     // Parameter opsional wajib di segmen terakhir, jadi kata kerjanya di depan —

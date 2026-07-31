@@ -63,7 +63,7 @@ class ManualPostTest extends TestCase
     {
         SourceAccount::create(['username' => self::AKUN, 'status' => 'approved']);
 
-        $this->get(route('posts.create'))
+        $this->get(route('suggestions'))
             ->assertOk()
             ->assertSee('name="permalink"', false)
             ->assertSee('name="images[]"', false)
@@ -71,9 +71,14 @@ class ManualPostTest extends TestCase
             ->assertSee(self::AKUN);
     }
 
-    public function test_post_manual_masuk_raw_dan_antrian_ai(): void
+    /**
+     * Kiriman admin jalannya sama persis dengan kiriman peran `user`: raw ditulis,
+     * ditandai usulan, TIDAK diantrikan. Dulu admin punya jalur cepat — itu cabang
+     * `if ($admin)` yang bikin satu formulir berperilaku dua macam.
+     */
+    public function test_post_manual_masuk_raw_sebagai_usulan(): void
     {
-        $this->kirim()->assertRedirect(route('posts.create'));
+        $this->kirim()->assertRedirect(route('suggestions'));
 
         $dir = storage_path('raw/'.self::AKUN.'/'.self::MEDIA);
         $this->assertFileExists("$dir/0.jpg");
@@ -83,17 +88,40 @@ class ManualPostTest extends TestCase
         $this->assertSame(self::AKUN, $post['_source_account']);
         $this->assertSame(['0.jpg'], $post['_images']);
         $this->assertTrue($post['_manual']);
+        // Jejak pengirim yang permanen — beda dengan `_suggested_by` yang dibuang
+        // saat disetujui. Ini yang menyusun daftar "kiriman saya".
+        $this->assertSame('operator@umroh.test', $post['_created_by']);
+        // Penanda "belum di-approve", ditulis untuk admin juga.
+        $this->assertSame('operator@umroh.test', $post['_suggested_by']);
         // Jangkar tahun buat penyusun — tanpa ini "14 Maret" dibaca sebagai tahun berjalan.
         $this->assertStringStartsWith('2026-03-14T', $post['timestamp']);
         $this->assertSame(self::PERMALINK, $post['permalink']);
 
-        // Akun yang belum terdaftar dibuat sekalian, langsung approved.
-        $this->assertSame('approved', SourceAccount::where('username', self::AKUN)->value('status'));
+        // Akunnya juga menunggu approval, termasuk yang dikirim admin.
+        $this->assertSame('pending', SourceAccount::where('username', self::AKUN)->value('status'));
 
-        Queue::assertPushed(ExtractPost::class);
+        // Tidak ada yang dibayar ke model sampai admin menekan "setujui & baca".
+        Queue::assertNotPushed(ExtractPost::class);
     }
 
-    public function test_kiriman_ulang_menimpa_bukan_menumpuk(): void
+    /** Daftar "kiriman saya" memakai `_created_by`, jadi kirimannya sendiri kelihatan. */
+    public function test_kiriman_sendiri_tampil_di_daftar(): void
+    {
+        $this->kirim();
+
+        $this->get(route('suggestions'))
+            ->assertOk()
+            ->assertSee('Kiriman saya')
+            ->assertSee('@'.self::AKUN)
+            ->assertSee('menunggu admin');
+    }
+
+    /**
+     * Kiriman ulang DITOLAK, siapa pun yang mengirim. Menimpa berarti membuang raw +
+     * hasil ekstraksi + baris paket se-media_id — tombol hapus paket yang sudah
+     * di-review, cuma lewat pintu lain. Betulkan dari /posts, bukan dari sini.
+     */
+    public function test_kiriman_ulang_ditolak_bukan_menimpa(): void
     {
         $this->kirim();
 
@@ -110,14 +138,12 @@ class ManualPostTest extends TestCase
         File::put(storage_path('extracted/'.self::MEDIA.'-0.json'), '{}');
 
         $this->kirim(['images' => [UploadedFile::fake()->image('flyer2.png', 900, 1200)]])
-            ->assertRedirect(route('posts.create'));
+            ->assertSessionHasErrors('permalink');
 
-        // Blok dilepas, jejak lama dibuang — kalau tidak, importOne() melihat barisnya
-        // sudah ada dan kiriman kedua diam-diam tidak mengubah apa pun.
-        $this->assertDatabaseMissing('excluded_posts', ['media_id' => self::MEDIA]);
-        $this->assertSame(0, Package::where('media_id', self::MEDIA)->count());
-        $this->assertFileDoesNotExist(storage_path('extracted/'.self::MEDIA.'-0.json'));
-        $this->assertFileExists(storage_path('raw/'.self::AKUN.'/'.self::MEDIA.'/0.jpg'));
+        // Semua jejaknya utuh: tidak ada yang dihapus lewat pintu ini.
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => self::MEDIA]);
+        $this->assertSame(1, Package::where('media_id', self::MEDIA)->count());
+        $this->assertFileExists(storage_path('extracted/'.self::MEDIA.'-0.json'));
     }
 
     public function test_permalink_bukan_post_ditolak(): void
@@ -127,6 +153,27 @@ class ManualPostTest extends TestCase
 
         $this->assertDirectoryDoesNotExist(storage_path('raw/'.self::AKUN));
         Queue::assertNothingPushed();
+    }
+
+    /**
+     * Instagram melayani post yang sama di dua URL. Kodenya sama, jadi media_id-nya
+     * wajib sama — kalau tidak, kiriman lewat URL berhandel lahir sebagai post kedua
+     * yang menggandakan paketnya alih-alih menimpa.
+     */
+    public function test_permalink_berhandel_media_id_sama(): void
+    {
+        $this->kirim(['permalink' => 'https://www.instagram.com/'.self::AKUN.'/p/DV-tyQIkuw5/'])
+            ->assertSessionHasNoErrors();
+
+        $this->assertFileExists(storage_path('raw/'.self::AKUN.'/'.self::MEDIA.'/post.json'));
+    }
+
+    /** Zip dirakit saat diunduh — kalau folder `extension/` pindah, ini yang jatuh. */
+    public function test_extension_bisa_diunduh(): void
+    {
+        $this->get(route('extension'))
+            ->assertOk()
+            ->assertDownload('umroh-sakti-extension.zip');
     }
 
     public function test_tanggal_posting_wajib(): void
@@ -140,7 +187,7 @@ class ManualPostTest extends TestCase
     {
         auth()->logout();
 
-        $this->get(route('posts.create'))->assertRedirect(route('login'));
+        $this->get(route('suggestions'))->assertRedirect(route('login'));
         $this->kirim()->assertRedirect(route('login'));
 
         Queue::assertNothingPushed();

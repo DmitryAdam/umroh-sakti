@@ -49,7 +49,7 @@ class ImportExtractedPackages extends Command
 
         $created = $merged = $skipped = $bukanPaket = $lewatTanggal = $sudahAda = $slideBuntu = 0;
         $blokir = 0;
-        $kurang = ['tanpa_tanggal' => 0, 'tanpa_harga' => 0];
+        $kurang = ['tanpa_gambar' => 0, 'tanpa_tanggal' => 0, 'tanpa_harga' => 0];
         $tolak = [];
 
         foreach ($files as $file) {
@@ -131,6 +131,7 @@ class ImportExtractedPackages extends Command
         $this->info("Paket baru: $created · digabung: $merged · sudah ada: $sudahAda"
             ." · bukan penawaran paket: $bukanPaket"
             ." · keberangkatan sebelum $ambang: $lewatTanggal"
+            ." · tanpa gambar: {$kurang['tanpa_gambar']}"
             ." · tanpa tanggal: {$kurang['tanpa_tanggal']} · tanpa harga: {$kurang['tanpa_harga']}"
             ." · akun diblokir: $blokir"
             ." · slide ditolak tapi postnya dipakai: $slideBuntu · rusak: $skipped");
@@ -240,13 +241,20 @@ class ImportExtractedPackages extends Command
      * Tanpa salah satunya paket tidak bisa dicari, diurut, atau dibandingkan —
      * itu seluruh gunanya portal ini.
      *
-     * @return 'tanpa_tanggal'|'tanpa_harga'|null
+     * Gambar ikut syarat masuk: satu paket = satu flyer, dan flyer itu satu-satunya
+     * bukti yang bisa dilihat manusia saat review. Hasil ekstraksi caption-only
+     * (`_useful_images` kosong — semua gambarnya kena dedup hash, atau jalur `seed`)
+     * lahir sebagai baris ber-`flyer_index` null: kartunya tampil tanpa gambar, dan
+     * vision tidak pernah memvonis "ini penawaran" karena tidak ada yang dilihat.
+     *
+     * @return 'tanpa_gambar'|'tanpa_tanggal'|'tanpa_harga'|null
      */
     private function belumLengkap(array $d): ?string
     {
         $prices = array_intersect_key($this->prices($d), array_flip(Package::PRICE_COLUMNS));
 
         return match (true) {
+            $this->flyerIndex($d) === null => 'tanpa_gambar',
             $this->tanggal($d) === null => 'tanpa_tanggal',
             array_sum($prices) <= 0 => 'tanpa_harga',   // harga 0 = gagal baca, bukan gratis
             default => null,

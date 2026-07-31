@@ -44,6 +44,12 @@ class SourceAccount extends Model
         return $q->where('status', 'blocked');
     }
 
+    /** Usulan dari peran `user` yang belum di-approve admin. Tidak pernah di-scrap. */
+    public function scopePending($q)
+    {
+        return $q->where('status', 'pending');
+    }
+
     public function isBlocked(): bool
     {
         return $this->status === 'blocked';
@@ -141,13 +147,19 @@ class SourceAccount extends Model
     }
 
     /**
-     * Baris teks (accounts.txt atau textarea di /akun) -> akun approved.
+     * Baris teks (accounts.txt atau textarea di /accounts) -> akun baru.
      * Sudah ada = tidak disentuh, status manual menang.
      *
+     * `$extra` menimpa defaultnya: usulan dari peran `user` masuk sebagai
+     * `['status' => 'pending', 'suggested_by' => <email>]` dan menunggu approval —
+     * semua jalur crawl menyaring `approved`, jadi baris pending tidak pernah
+     * membakar kuota Graph sendiri.
+     *
      * @param  iterable<string>  $lines
+     * @param  array<string, mixed>  $extra
      * @return list<string> username yang baru didaftarkan
      */
-    public static function register(iterable $lines): array
+    public static function register(iterable $lines, array $extra = []): array
     {
         $new = [];
         foreach ($lines as $line) {
@@ -155,7 +167,9 @@ class SourceAccount extends Model
             if ($username === null || static::where('username', $username)->exists()) {
                 continue;
             }
-            static::create(['username' => $username, 'status' => 'approved']);
+            // $extra di kiri: `+` mempertahankan kunci sebelah kiri, jadi urutan
+            // terbalik bikin `status` usulan diam-diam balik jadi approved.
+            static::create($extra + ['username' => $username, 'status' => 'approved']);
             $new[] = $username;
         }
 

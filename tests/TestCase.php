@@ -8,15 +8,23 @@ use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 abstract class TestCase extends BaseTestCase
 {
     /**
-     * Login sebagai operator. Semua alat kerja (daftar akun, panel pipeline, tombol
-     * aksi per kartu) ada di grup `auth` — dulu kuncinya env local, jadi test-nya
-     * memalsukan env; sekarang cukup punya satu baris user.
+     * Login sebagai admin. Semua alat kerja (daftar akun, panel pipeline, tombol
+     * aksi per kartu, daftar pengguna) ada di grup `auth` + `can:admin`.
      */
     protected function actingAsOperator(): static
     {
         return $this->actingAs(User::create([
             'email' => 'operator@umroh.test',
-            'password' => 'rahasia-uji',
+            'role' => 'admin',
+        ]));
+    }
+
+    /** Login sebagai peran `user`: cuma /suggestions, tidak ada alat kerja. */
+    protected function actingAsPengusul(): static
+    {
+        return $this->actingAs(User::create([
+            'email' => 'pengusul@umroh.test',
+            'role' => 'user',
         ]));
     }
 }

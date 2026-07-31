@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Probe tool untuk langkah 1-3 Urutan Kerja.
  *
@@ -23,14 +24,14 @@ declare(strict_types=1);
 // llmPost). Naikkan di sini, bukan di php.ini — job memanggil probe lewat Process.
 ini_set('memory_limit', '512M');
 
-const ROOT     = __DIR__;
-const RAW_DIR  = ROOT . '/storage/raw';
-const EXT_DIR  = ROOT . '/storage/extracted';
-const HASH_FILE = ROOT . '/storage/hashes.json';
-const QUEUE_FILE = ROOT . '/storage/fetch_queue.json';
+const ROOT = __DIR__;
+const RAW_DIR = ROOT.'/storage/raw';
+const EXT_DIR = ROOT.'/storage/extracted';
+const HASH_FILE = ROOT.'/storage/hashes.json';
+const QUEUE_FILE = ROOT.'/storage/fetch_queue.json';
 // Profil akun (bukan post): {username}.json + {username}.jpg. Bukan di storage/raw
 // karena raw itu tempat singgah per-post dan ikut di-prune tiap import.
-const PROFILE_DIR = ROOT . '/storage/profiles';
+const PROFILE_DIR = ROOT.'/storage/profiles';
 
 // Field yang harus terisi supaya sebuah post dihitung "berhasil dinormalisasi".
 // Yang kosong masuk `_missing` -> `_needs_review` -> antrian review manusia.
@@ -39,7 +40,6 @@ const REQUIRED_FIELDS = ['departure_date', 'duration_days', 'departure_city', 'p
 // Harga di bawah confidence ini wajib masuk review queue, ga pernah auto-publish.
 const PRICE_CONFIDENCE_FLOOR = 0.8;
 
-
 // ---------------------------------------------------------------- bootstrap
 
 function env(string $key, ?string $default = null): ?string
@@ -47,10 +47,10 @@ function env(string $key, ?string $default = null): ?string
     static $vars = null;
     if ($vars === null) {
         $vars = [];
-        $path = ROOT . '/.env';
+        $path = ROOT.'/.env';
         if (is_file($path)) {
             foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                if ($line === '' || $line[0] === '#' || !str_contains($line, '=')) {
+                if ($line === '' || $line[0] === '#' || ! str_contains($line, '=')) {
                     continue;
                 }
                 [$k, $v] = explode('=', $line, 2);
@@ -59,6 +59,7 @@ function env(string $key, ?string $default = null): ?string
         }
     }
     $value = $vars[$key] ?? getenv($key) ?: null;
+
     return ($value === null || $value === '') ? $default : $value;
 }
 
@@ -79,19 +80,19 @@ function excludedIds(): array
     }
 
     $ids = [];
-    $db  = ROOT . '/database/database.sqlite';
-    if (!is_file($db)) {
+    $db = ROOT.'/database/database.sqlite';
+    if (! is_file($db)) {
         return $ids;
     }
 
     try {
-        $pdo  = new PDO("sqlite:$db", options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $pdo = new PDO("sqlite:$db", options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $rows = $pdo->query('SELECT media_id FROM excluded_posts')->fetchAll(PDO::FETCH_COLUMN);
         foreach ($rows as $id) {
             $ids[(string) $id] = true;
         }
     } catch (Throwable $e) {
-        out('  (daftar pengecualian tidak terbaca: ' . $e->getMessage() . ')');
+        out('  (daftar pengecualian tidak terbaca: '.$e->getMessage().')');
     }
 
     return $ids;
@@ -104,12 +105,13 @@ function need(string $key): string
         fwrite(STDERR, "Isi $key di .env dulu (copy dari .env.example).\n");
         exit(1);
     }
+
     return $value;
 }
 
 function out(string $msg): void
 {
-    fwrite(STDOUT, $msg . "\n");
+    fwrite(STDOUT, $msg."\n");
 }
 
 // ------------------------------------------------------------------- schema
@@ -123,24 +125,24 @@ function nullable(array $schema): array
 function extractionSchema(): array
 {
     $tier = [
-        'type'       => 'object',
+        'type' => 'object',
         'properties' => [
-            'occupancy'        => ['type' => 'string', 'enum' => ['quad', 'triple', 'double', 'single']],
-            'amount'           => ['type' => 'integer'],
-            'currency'         => ['type' => 'string', 'enum' => ['IDR', 'USD']],
+            'occupancy' => ['type' => 'string', 'enum' => ['quad', 'triple', 'double', 'single']],
+            'amount' => ['type' => 'integer'],
+            'currency' => ['type' => 'string', 'enum' => ['IDR', 'USD']],
             'is_starting_from' => ['type' => 'boolean'],
         ],
-        'required'             => ['occupancy', 'amount', 'currency', 'is_starting_from'],
+        'required' => ['occupancy', 'amount', 'currency', 'is_starting_from'],
         'additionalProperties' => false,
     ];
 
     $hotel = nullable([
-        'type'       => 'object',
+        'type' => 'object',
         'properties' => [
             'raw_name' => ['type' => 'string'],
-            'nights'   => nullable(['type' => 'integer']),
+            'nights' => nullable(['type' => 'integer']),
         ],
-        'required'             => ['raw_name', 'nights'],
+        'required' => ['raw_name', 'nights'],
         'additionalProperties' => false,
     ]);
 
@@ -148,16 +150,16 @@ function extractionSchema(): array
     // baris; sisanya (PPIU, kota, pembimbing, fasilitas) diwarisi dari field
     // tingkat atas saat import — lihat ImportExtractedPackages::offers().
     $departure = [
-        'type'       => 'object',
+        'type' => 'object',
         'properties' => [
             'departure_date' => nullable(['type' => 'string']),
             'date_certainty' => ['type' => 'string', 'enum' => ['exact', 'month', 'season', 'unknown']],
-            'duration_days'  => nullable(['type' => 'integer']),
-            'price_tiers'    => ['type' => 'array', 'items' => $tier],
-            'airline'        => nullable(['type' => 'string']),
-            'extension'      => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
-            'hotel_makkah'   => $hotel,
-            'hotel_madinah'  => $hotel,
+            'duration_days' => nullable(['type' => 'integer']),
+            'price_tiers' => ['type' => 'array', 'items' => $tier],
+            'airline' => nullable(['type' => 'string']),
+            'extension' => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
+            'hotel_makkah' => $hotel,
+            'hotel_madinah' => $hotel,
         ],
         'required' => [
             'departure_date', 'date_certainty', 'duration_days', 'price_tiers',
@@ -167,54 +169,54 @@ function extractionSchema(): array
     ];
 
     $confidence = [
-        'type'       => 'object',
+        'type' => 'object',
         'properties' => [
             'departure_date' => ['type' => 'number'],
-            'price'          => ['type' => 'number'],
-            'hotels'         => ['type' => 'number'],
-            'ppiu'           => ['type' => 'number'],
+            'price' => ['type' => 'number'],
+            'hotels' => ['type' => 'number'],
+            'ppiu' => ['type' => 'number'],
         ],
-        'required'             => ['departure_date', 'price', 'hotels', 'ppiu'],
+        'required' => ['departure_date', 'price', 'hotels', 'ppiu'],
         'additionalProperties' => false,
     ];
 
     return [
-        'type'       => 'object',
+        'type' => 'object',
         'properties' => [
             // Diputuskan duluan: postingan travel mayoritas BUKAN penawaran paket.
             // Gemini cuma menyalin teks flyer; yang menilai konteks postingan ini.
-            'post_kind'      => ['type' => 'string', 'enum' => [
+            'post_kind' => ['type' => 'string', 'enum' => [
                 'package_offer', 'hotel_info', 'education', 'testimonial', 'promo_generic', 'other',
             ]],
-            'ppiu_name'      => nullable(['type' => 'string']),
+            'ppiu_name' => nullable(['type' => 'string']),
             'license_number' => nullable(['type' => 'string']),
             'departure_date' => nullable(['type' => 'string']),
             'date_certainty' => ['type' => 'string', 'enum' => ['exact', 'month', 'season', 'unknown']],
-            'duration_days'  => nullable(['type' => 'integer']),
+            'duration_days' => nullable(['type' => 'integer']),
             'departure_city' => nullable(['type' => 'string']),
-            'airline'        => nullable(['type' => 'string']),
-            'guide_name'     => nullable(['type' => 'string']),
-            'extension'      => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
-            'price_tiers'    => ['type' => 'array', 'items' => $tier],
+            'airline' => nullable(['type' => 'string']),
+            'guide_name' => nullable(['type' => 'string']),
+            'extension' => ['type' => 'string', 'enum' => ['turki', 'dubai', 'aqsa', 'none', 'unknown']],
+            'price_tiers' => ['type' => 'array', 'items' => $tier],
             // Semua keberangkatan yang ditawarkan gambar ini, termasuk yang sudah
             // ditaruh di field tingkat atas. Satu elemen = satu baris paket.
-            'departures'     => ['type' => 'array', 'items' => $departure],
-            'hotel_makkah'   => $hotel,
-            'hotel_madinah'  => $hotel,
-            'facilities'     => [
-                'type'  => 'array',
+            'departures' => ['type' => 'array', 'items' => $departure],
+            'hotel_makkah' => $hotel,
+            'hotel_madinah' => $hotel,
+            'facilities' => [
+                'type' => 'array',
                 'items' => [
                     'type' => 'string',
                     'enum' => ['visa', 'tiket', 'hotel', 'makan_3x', 'muthawif',
-                               'perlengkapan', 'handling', 'city_tour', 'asuransi'],
+                        'perlengkapan', 'handling', 'city_tour', 'asuransi'],
                 ],
             ],
             'facilities_raw' => nullable(['type' => 'string']),
             // Nomor gambar (sesuai pemisah di transkrip) yang memuat detail paket.
             // Slide dakwah teksnya bisa lebih panjang dari flyernya, jadi ini tidak
             // bisa ditebak dari panjang teks — harus dinilai maknanya.
-            'detail_images'  => ['type' => 'array', 'items' => ['type' => 'integer']],
-            'confidence'     => $confidence,
+            'detail_images' => ['type' => 'array', 'items' => ['type' => 'integer']],
+            'confidence' => $confidence,
         ],
         'required' => [
             'post_kind',
@@ -387,12 +389,13 @@ function graphGet(string $url): array
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_TIMEOUT => 30,
         CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$usage) {
             [$name, $val] = array_pad(explode(':', $line, 2), 2, '');
             if (in_array(strtolower(trim($name)), ['x-app-usage', 'x-business-use-case-usage'], true)) {
                 $usage[strtolower(trim($name))] = trim($val);
             }
+
             return strlen($line);
         },
     ]);
@@ -410,21 +413,22 @@ function graphGet(string $url): array
     }
     $json = json_decode($body, true);
     if ($code !== 200) {
-        $err  = $json['error'] ?? [];
-        $msg  = $err['message'] ?? $body;
+        $err = $json['error'] ?? [];
+        $msg = $err['message'] ?? $body;
         // Kode Graph API yang sering muncul di jalur ini, diterjemahkan ke penyebab nyata.
         $hint = match ($err['code'] ?? 0) {
-            10  => "Permission kurang. business_discovery butuh SEMUA ini:\n"
-                 . "       instagram_basic, instagram_manage_insights, pages_show_list,\n"
-                 . "       pages_read_engagement, business_management.\n"
-                 . "       Yang paling sering kelewat: instagram_manage_insights.",
+            10 => "Permission kurang. business_discovery butuh SEMUA ini:\n"
+                 ."       instagram_basic, instagram_manage_insights, pages_show_list,\n"
+                 ."       pages_read_engagement, business_management.\n"
+                 .'       Yang paling sering kelewat: instagram_manage_insights.',
             110 => 'Username tidak ditemukan, atau akun target bukan Professional (Business/Creator).',
             190 => 'Token invalid/kedaluwarsa. Ambil token baru lalu jalankan: php probe.php auth <token>',
             4, 17, 32 => 'Kena rate limit tingkat app. Semua request numpuk di satu token — kasih jeda.',
             default => null,
         };
-        throw new RuntimeException("Graph API HTTP $code: $msg" . ($hint ? "\n       -> $hint" : ''));
+        throw new RuntimeException("Graph API HTTP $code: $msg".($hint ? "\n       -> $hint" : ''));
     }
+
     return $json;
 }
 
@@ -445,6 +449,7 @@ function lastAppUsage(?array $set = null): array
     if ($set !== null) {
         $usage = $set;
     }
+
     return $usage;
 }
 
@@ -460,7 +465,7 @@ function lastAppUsage(?array $set = null): array
 function cmdQuota(array $argv): void
 {
     $version = env('IG_GRAPH_VERSION', 'v25.0');
-    $creds   = igCreds();
+    $creds = igCreds();
 
     foreach ($creds as $i => $cred) {
         $url = sprintf(
@@ -482,9 +487,9 @@ function cmdQuota(array $argv): void
             'app %d/%d  call_count %s%%  cputime %s%%  total_time %s%%  -> %s',
             $i + 1,
             count($creds),
-            $u['call_count']    ?? '?',
+            $u['call_count'] ?? '?',
             $u['total_cputime'] ?? '?',
-            $u['total_time']    ?? '?',
+            $u['total_time'] ?? '?',
             $status,
         ));
     }
@@ -508,8 +513,8 @@ function igCreds(): array
  * sama banyak — salah pasang berarti token app A dikirim dengan id akun app B,
  * dan Graph membalasnya `#190`, bukan sesuatu yang kelihatan salah konfigurasi.
  *
- * @param  string[] $users
- * @param  string[] $tokens
+ * @param  string[]  $users
+ * @param  string[]  $tokens
  * @return list<array{user: string, token: string}>
  */
 function igPair(array $users, array $tokens): array
@@ -517,7 +522,7 @@ function igPair(array $users, array $tokens): array
     if (count($users) !== 1 && count($users) !== count($tokens)) {
         throw new RuntimeException(sprintf(
             'IG_USER_ID %d entri vs IG_ACCESS_TOKEN %d entri. Isi satu IG_USER_ID '
-            . '(Page yang sama di beberapa app) atau sepasang per app, urutannya sama.',
+            .'(Page yang sama di beberapa app) atau sepasang per app, urutannya sama.',
             count($users),
             count($tokens),
         ));
@@ -525,7 +530,7 @@ function igPair(array $users, array $tokens): array
 
     return array_map(
         fn (int $i, string $token) => [
-            'user'  => $users[count($users) === 1 ? 0 : $i],
+            'user' => $users[count($users) === 1 ? 0 : $i],
             'token' => $token,
         ],
         array_keys($tokens),
@@ -545,9 +550,9 @@ function cmdFetch(array $argv): void
     // Satu proses = satu akun (FetchAccount), jadi giliran tidak bisa dititip ke
     // variabel static seperti llmPostAny. Awalnya diambil dari nama akunnya:
     // tanpa state apa pun, akun yang berbeda mulai di app yang berbeda.
-    $creds   = igCreds();
-    $c       = crc32($username) % count($creds);
-    $sisa    = count($creds) - 1;
+    $creds = igCreds();
+    $c = crc32($username) % count($creds);
+    $sisa = count($creds) - 1;
     $version = env('IG_GRAPH_VERSION', 'v25.0');
 
     // thumbnail_url dipakai untuk VIDEO/Reels — flyer sering diposting sebagai Reels,
@@ -555,13 +560,13 @@ function cmdFetch(array $argv): void
     // like_count/comments_count dibuang: tidak pernah dibaca di mana pun, dan yang
     // mengikat kuota Graph itu total_time — field lebih sedikit = response lebih murah.
     $fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,'
-        . 'children{id,media_type,media_url,thumbnail_url}';
+        .'children{id,media_type,media_url,thumbnail_url}';
 
-    $after   = null;
-    $count   = 0;
+    $after = null;
+    $count = 0;
     $skipped = 0;
     $scanned = 0;
-    $excluded  = excludedIds();
+    $excluded = excludedIds();
 
     out(sprintf('fetch @%s limit=%d (%d post dikecualikan, dilewat)', $username, $limit, count($excluded)));
 
@@ -606,8 +611,8 @@ function cmdFetch(array $argv): void
             '  GET graph.facebook.com/%s business_discovery(@%s) %s%s',
             $version,
             $username,
-            $after === null ? "media.limit($page)" : "media.after(" . substr($after, 0, 12) . "…).limit($page)",
-            count($creds) > 1 ? ' [app ' . ($c + 1) . '/' . count($creds) . ']' : '',
+            $after === null ? "media.limit($page)" : 'media.after('.substr($after, 0, 12)."…).limit($page)",
+            count($creds) > 1 ? ' [app '.($c + 1).'/'.count($creds).']' : '',
         ));
 
         try {
@@ -616,6 +621,7 @@ function cmdFetch(array $argv): void
             if ($page > 1 && str_contains($e->getMessage(), 'reduce the amount of data')) {
                 $page = intdiv($page, 2);
                 out("  response kegedean, ulangi dengan media.limit($page)");
+
                 continue;
             }
             // Limitnya per app, bukan per akun: pindah app, ulangi halaman yang sama.
@@ -623,12 +629,13 @@ function cmdFetch(array $argv): void
             if ($sisa > 0 && str_contains($e->getMessage(), 'rate limit')) {
                 $c = ($c + 1) % count($creds);
                 $sisa--;
-                out('  kena rate limit, pindah ke app ' . ($c + 1) . '/' . count($creds));
+                out('  kena rate limit, pindah ke app '.($c + 1).'/'.count($creds));
+
                 continue;
             }
             throw $e;
         }
-        $bd  = $res['business_discovery'] ?? null;
+        $bd = $res['business_discovery'] ?? null;
         if ($bd === null) {
             // Akun personal / bukan Professional -> ga terbaca sama sekali.
             throw new RuntimeException("@$username tidak terbaca. Pastikan akun Professional.");
@@ -655,12 +662,14 @@ function cmdFetch(array $argv): void
             if (isset($excluded[$id])) {
                 $skipped++;
                 out("  $id dilewat: sudah dikecualikan");
+
                 continue;
             }
             // Sudah ada di disk: rawnya masih dipakai untuk flyer, jangan di-download ulang.
-            if (is_file(RAW_DIR . "/$username/$id/post.json")) {
+            if (is_file(RAW_DIR."/$username/$id/post.json")) {
                 $skipped++;
                 out("  $id dilewat: sudah ada di storage/raw");
+
                 continue;
             }
             // VIDEO/REELS dan carousel yang isinya video semua: tidak ada flyer yang
@@ -669,6 +678,7 @@ function cmdFetch(array $argv): void
             if (imageUrlsOf($post) === []) {
                 $skipped++;
                 out("  $id dilewat: {$post['media_type']} tanpa gambar");
+
                 continue;
             }
 
@@ -684,7 +694,7 @@ function cmdFetch(array $argv): void
     }
 
     out("@$username: $count post baru tersimpan di storage/raw/$username/"
-        . ($skipped > 0 ? " ($skipped dilewat, $scanned dipindai)" : ''));
+        .($skipped > 0 ? " ($skipped dilewat, $scanned dipindai)" : ''));
 }
 
 /** "https://www.instagram.com/foo/?x=1" atau "@foo" -> "foo". */
@@ -698,6 +708,7 @@ function usernameOf(string $line): ?string
         $line = parse_url($line, PHP_URL_PATH) ?? '';
     }
     $line = trim($line, "/@ \t");
+
     return preg_match('/^[A-Za-z0-9._]+$/', $line) ? $line : null;
 }
 
@@ -719,17 +730,17 @@ function cmdProfile(array $argv): void
 {
     $usernames = array_values(array_filter(
         array_slice($argv, 2),
-        fn (string $arg) => !str_starts_with($arg, '--'),
+        fn (string $arg) => ! str_starts_with($arg, '--'),
     ));
     if ($usernames === []) {
         out('Usage: php probe.php profile <username> [username…] [--sleep=3]');
         exit(1);
     }
 
-    $creds   = igCreds();
+    $creds = igCreds();
     $version = env('IG_GRAPH_VERSION', 'v25.0');
-    $sleep   = (float) (optval($argv, 'sleep') ?? env('IG_FETCH_SLEEP', '3'));
-    $fields  = 'name,followers_count,follows_count,media_count,profile_picture_url';
+    $sleep = (float) (optval($argv, 'sleep') ?? env('IG_FETCH_SLEEP', '3'));
+    $fields = 'name,followers_count,follows_count,media_count,profile_picture_url';
 
     $ok = 0;
     foreach ($usernames as $i => $username) {
@@ -755,7 +766,7 @@ function cmdProfile(array $argv): void
                 }
                 // Satu akun mati (username salah / bukan Professional) tidak boleh
                 // menghentikan sisa daftarnya — 196 akun, satu proses.
-                out('  gagal @' . $username . ': ' . strtok($e->getMessage(), "\n"));
+                out('  gagal @'.$username.': '.strtok($e->getMessage(), "\n"));
                 break;
             }
 
@@ -776,7 +787,7 @@ function cmdFetchAll(array $argv): void
 {
     $limit = (int) (optval($argv, 'limit') ?? 50);
     $sleep = (int) (optval($argv, 'sleep') ?? 3);
-    $cool  = (int) (optval($argv, 'cooldown') ?? 300);
+    $cool = (int) (optval($argv, 'cooldown') ?? 300);
 
     $queue = is_file(QUEUE_FILE)
         ? (json_decode((string) file_get_contents(QUEUE_FILE), true) ?: [])
@@ -784,14 +795,14 @@ function cmdFetchAll(array $argv): void
 
     // File daftar akun opsional: tanpa itu, lanjutkan antrian yang sudah ada.
     // Argumen ber-prefix "--" itu flag, bukan nama file.
-    $file = ($argv[2] ?? null) !== null && !str_starts_with($argv[2], '--') ? $argv[2] : null;
+    $file = ($argv[2] ?? null) !== null && ! str_starts_with($argv[2], '--') ? $argv[2] : null;
     if ($file !== null) {
-        if (!is_file($file)) {
+        if (! is_file($file)) {
             out("File $file tidak ada. Isi satu username/URL per baris.");
             exit(1);
         }
         foreach (file($file, FILE_IGNORE_NEW_LINES) as $line) {
-            if (($u = usernameOf($line)) && !isset($queue[$u])) {
+            if (($u = usernameOf($line)) && ! isset($queue[$u])) {
                 $queue[$u] = ['status' => 'pending', 'error' => null];
             }
         }
@@ -809,9 +820,9 @@ function cmdFetchAll(array $argv): void
     };
     $save();
 
-    $pending = array_keys(array_filter($queue, fn($r) => $r['status'] === 'pending'));
-    $total   = count($queue);
-    out(count($pending) . " pending dari $total akun.");
+    $pending = array_keys(array_filter($queue, fn ($r) => $r['status'] === 'pending'));
+    $total = count($queue);
+    out(count($pending)." pending dari $total akun.");
 
     $i = 0;
     foreach ($pending as $username) {
@@ -829,6 +840,7 @@ function cmdFetchAll(array $argv): void
                 if (str_contains($msg, 'rate limit') && $attempt < 3) {
                     out("       rate limit, tunggu {$cool}s lalu coba lagi...");
                     sleep($cool);
+
                     continue;
                 }
                 // Token mati bukan masalah per-akun: sisa antrian pasti gagal juga.
@@ -882,6 +894,7 @@ function imageUrlsOf(array $post): array
     if (($post['media_type'] ?? '') === 'CAROUSEL_ALBUM') {
         return array_values(array_filter(array_map('imageUrlOf', $post['children']['data'] ?? [])));
     }
+
     return ($url = imageUrlOf($post)) ? [$url] : [];
 }
 
@@ -898,14 +911,14 @@ function saveProfile(string $username, array $bd): void
     @mkdir(PROFILE_DIR, 0775, true);
 
     $profile = [
-        'username'        => $username,
-        'full_name'       => $bd['name'] ?? null,
+        'username' => $username,
+        'full_name' => $bd['name'] ?? null,
         'followers_count' => $bd['followers_count'] ?? null,
-        'follows_count'   => $bd['follows_count'] ?? null,
-        'media_count'     => $bd['media_count'] ?? null,
-        'fetched_at'      => date('c'),
+        'follows_count' => $bd['follows_count'] ?? null,
+        'media_count' => $bd['media_count'] ?? null,
+        'fetched_at' => date('c'),
     ];
-    file_put_contents(PROFILE_DIR . "/$username.json", json_encode($profile, JSON_PRETTY_PRINT));
+    file_put_contents(PROFILE_DIR."/$username.json", json_encode($profile, JSON_PRETTY_PRINT));
 
     out(sprintf(
         '  profil @%s: %s pengikut, %s diikuti, %s post di IG',
@@ -916,14 +929,14 @@ function saveProfile(string $username, array $bd): void
     ));
 
     if (($url = $bd['profile_picture_url'] ?? null) && ($bytes = @file_get_contents($url)) !== false) {
-        file_put_contents(PROFILE_DIR . "/$username.jpg", $bytes);
+        file_put_contents(PROFILE_DIR."/$username.jpg", $bytes);
         out(sprintf('    GET foto profil -> storage/profiles/%s.jpg (%.1f KB)', $username, strlen($bytes) / 1024));
     }
 }
 
 function savePost(string $username, array $post): void
 {
-    $dir = RAW_DIR . "/$username/" . $post['id'];
+    $dir = RAW_DIR."/$username/".$post['id'];
     @mkdir($dir, 0775, true);
 
     // Jalur seed: flyer sudah ada di disk, ga perlu di-download.
@@ -935,6 +948,7 @@ function savePost(string $username, array $post): void
         $bytes = @file_get_contents($url);
         if ($bytes === false) {
             out(sprintf('    gagal download gambar %d dari %s', $i, parse_url($url, PHP_URL_HOST) ?: '?'));
+
             continue;
         }
         $path = "$dir/$i.jpg";
@@ -952,8 +966,8 @@ function savePost(string $username, array $post): void
 
     // Raw disimpan terpisah dari hasil ekstraksi -> bisa re-extract tanpa crawl ulang.
     $post['_source_account'] = $username;
-    $post['_images']         = $files;
-    $post['_fetched_at']     = date('c');
+    $post['_images'] = $files;
+    $post['_fetched_at'] = date('c');
     file_put_contents("$dir/post.json", json_encode($post, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 }
 
@@ -972,8 +986,8 @@ function savePost(string $username, array $post): void
  * menukar token untuk slot ke-N di IG_ACCESS_TOKEN. Jumlahnya wajib sepadan:
  * id app A dipasang dengan secret app B cuma kelihatan sebagai galat OAuth.
  *
- * @param  string[] $ids
- * @param  string[] $secrets
+ * @param  string[]  $ids
+ * @param  string[]  $secrets
  * @return array{0: string, 1: string}
  */
 function metaApp(array $ids, array $secrets, int $slot): array
@@ -985,7 +999,7 @@ function metaApp(array $ids, array $secrets, int $slot): array
             count($secrets),
         ));
     }
-    if (!isset($ids[$slot])) {
+    if (! isset($ids[$slot])) {
         throw new RuntimeException(sprintf(
             '--app=%d di luar daftar: META_APP_ID cuma punya %d entri (slot 0..%d).',
             $slot,
@@ -1007,7 +1021,7 @@ function cmdAuth(array $argv): void
     if (str_starts_with($short, 'IGAA')) {
         throw new RuntimeException(
             "Token diawali IGAA = Business Login for Instagram. Tidak punya business_discovery.\n"
-            . '       Butuh User Token dari Meta App (produk "Instagram API with Facebook Login"), diawali EAA.'
+            .'       Butuh User Token dari Meta App (produk "Instagram API with Facebook Login"), diawali EAA.'
         );
     }
 
@@ -1020,20 +1034,20 @@ function cmdAuth(array $argv): void
     out("App slot $slot: $appId");
 
     $version = env('IG_GRAPH_VERSION', 'v25.0');
-    $base    = "https://graph.facebook.com/$version";
+    $base = "https://graph.facebook.com/$version";
 
     // 1. Short-lived -> long-lived user token (60 hari).
-    $res = graphGet($base . '/oauth/access_token?' . http_build_query([
-        'grant_type'        => 'fb_exchange_token',
-        'client_id'         => $appId,
-        'client_secret'     => $secret,
+    $res = graphGet($base.'/oauth/access_token?'.http_build_query([
+        'grant_type' => 'fb_exchange_token',
+        'client_id' => $appId,
+        'client_secret' => $secret,
         'fb_exchange_token' => $short,
     ]));
     $longUser = $res['access_token'];
 
     // 2. Page + IG Business Account yang ter-link.
-    $pages = graphGet($base . '/me/accounts?' . http_build_query([
-        'fields'       => 'id,name,access_token,instagram_business_account{id,username}',
+    $pages = graphGet($base.'/me/accounts?'.http_build_query([
+        'fields' => 'id,name,access_token,instagram_business_account{id,username}',
         'access_token' => $longUser,
     ]));
 
@@ -1041,22 +1055,23 @@ function cmdAuth(array $argv): void
     foreach ($pages['data'] ?? [] as $page) {
         $ig = $page['instagram_business_account'] ?? null;
         out(str_repeat('-', 46));
-        out('Page          : ' . $page['name'] . ' (' . $page['id'] . ')');
+        out('Page          : '.$page['name'].' ('.$page['id'].')');
         if ($ig === null) {
             out('IG account    : BELUM ter-link. Link dari Meta Business Suite dulu.');
+
             continue;
         }
         $found = true;
-        out('IG account    : @' . $ig['username']);
+        out('IG account    : @'.$ig['username']);
         out('');
         out('Tempel ke .env:');
-        out('  IG_USER_ID=' . $ig['id']);
+        out('  IG_USER_ID='.$ig['id']);
         // Page token turunan long-lived user token tidak expire selama izin tidak dicabut.
-        out("  IG_ACCESS_TOKEN slot $slot = " . $page['access_token']);
+        out("  IG_ACCESS_TOKEN slot $slot = ".$page['access_token']);
     }
     out(str_repeat('-', 46));
 
-    if (!$found) {
+    if (! $found) {
         throw new RuntimeException('Tidak ada Page dengan IG Business Account ter-link.');
     }
     out('Lalu tes: php probe.php fetch <username_travel_target> --limit=5');
@@ -1071,15 +1086,15 @@ function cmdAuth(array $argv): void
 function cmdSeed(array $argv): void
 {
     $src = $argv[2] ?? null;
-    if ($src === null || !is_dir($src)) {
+    if ($src === null || ! is_dir($src)) {
         out('Usage: php probe.php seed <dir berisi .txt (+ .jpg opsional)>');
         exit(1);
     }
 
     $count = 0;
-    foreach (glob(rtrim($src, '/') . '/*.txt') ?: [] as $txt) {
+    foreach (glob(rtrim($src, '/').'/*.txt') ?: [] as $txt) {
         $slug = pathinfo($txt, PATHINFO_FILENAME);
-        $id   = 'manual_' . preg_replace('/[^a-z0-9_-]/i', '_', $slug);
+        $id = 'manual_'.preg_replace('/[^a-z0-9_-]/i', '_', $slug);
 
         $flyers = array_merge(
             glob("$src/$slug.jpg") ?: [],
@@ -1087,12 +1102,12 @@ function cmdSeed(array $argv): void
         );
 
         savePost('manual', [
-            'id'         => $id,
-            'caption'    => file_get_contents($txt),
+            'id' => $id,
+            'caption' => file_get_contents($txt),
             'media_type' => $flyers === [] ? 'IMAGE' : 'CAROUSEL_ALBUM',
-            'permalink'  => null,
-            'timestamp'  => null,
-            '_local'     => $flyers,
+            'permalink' => null,
+            'timestamp' => null,
+            '_local' => $flyers,
         ]);
         $count++;
     }
@@ -1104,11 +1119,11 @@ function cmdSeed(array $argv): void
 
 function cmdExtract(array $argv): void
 {
-    $limit  = (int) (optval($argv, 'limit') ?? 200);
-    $force  = in_array('--force', $argv, true);
+    $limit = (int) (optval($argv, 'limit') ?? 200);
+    $force = in_array('--force', $argv, true);
     // --only=<media_id>: ekstrak ulang satu post saja, buat ngetes perubahan prompt.
-    $only   = optval($argv, 'only');
-    $force  = $force || $only !== null;
+    $only = optval($argv, 'only');
+    $force = $force || $only !== null;
     // --no-gate: gerbang vision dilewati. Buat tombol "baca ulang AI" di halaman post —
     // operator sudah melihat flyernya sendiri dan menilai vonis vision salah.
     $noGate = in_array('--no-gate', $argv, true);
@@ -1119,9 +1134,9 @@ function cmdExtract(array $argv): void
     $done = 0;
     $visionCalls = 0;
     $ditolak = 0;
-    $excluded  = excludedIds();
+    $excluded = excludedIds();
 
-    foreach (glob(RAW_DIR . '/*/*/post.json') ?: [] as $postFile) {
+    foreach (glob(RAW_DIR.'/*/*/post.json') ?: [] as $postFile) {
         if ($done >= $limit) {
             break;
         }
@@ -1138,20 +1153,29 @@ function cmdExtract(array $argv): void
         }
         // Satu post bisa menghasilkan beberapa file (carousel dipecah per gambar),
         // jadi "sudah pernah diekstrak" dicek dengan pola, bukan satu nama file.
-        if (!$force && glob(EXT_DIR . '/' . $post['id'] . '{.json,-*.json}', GLOB_BRACE)) {
+        if (! $force && glob(EXT_DIR.'/'.$post['id'].'{.json,-*.json}', GLOB_BRACE)) {
             continue;
         }
         if (isset($excluded[(string) $post['id']])) {
             out("  {$post['id']} dilewat: sudah dikecualikan");
+
+            continue;
+        }
+        // Usulan yang belum di-approve admin: rawnya sudah ada, tapi belum boleh
+        // dibayar ke model. `--only` lolos — itu jalur tombol "setujui", dan
+        // penandanya sudah dibuang sebelum job-nya dilempar.
+        if ($only === null && isset($post['_suggested_by'])) {
+            out("  {$post['id']} dilewat: usulan menunggu approval");
+
             continue;
         }
 
-        $dir    = dirname($postFile);
+        $dir = dirname($postFile);
         $images = [];
-        $sent   = [];   // nama file per gambar yang dikirim, urutannya = urutan di prompt
+        $sent = [];   // nama file per gambar yang dikirim, urutannya = urutan di prompt
         foreach (claimImages($dir, $post) as $name => $bytes) {
             $images[] = base64_encode($bytes);
-            $sent[]   = $name;
+            $sent[] = $name;
         }
 
         $caption = trim((string) ($post['caption'] ?? ''));
@@ -1169,12 +1193,12 @@ function cmdExtract(array $argv): void
         // tidak pernah dipanggil untuk post begitu. Sengaja asimetris — cuma boleh
         // menolak, tidak pernah meloloskan: caption travel sering cuma "chat admin"
         // padahal flyernya paket beneran, jadi ragu = lanjut ke vision.
-        if (!$noGate && $images !== [] && strlen($caption) >= CAPTION_GATE_MIN) {
+        if (! $noGate && $images !== [] && strlen($caption) >= CAPTION_GATE_MIN) {
             $kind = readCaption($models, $caption);
             if ($kind !== null) {
                 out("  caption: $kind — vision dilewat");
                 $data = ['post_kind' => $kind, '_rejected_by' => 'caption'];
-                writeExtraction(EXT_DIR . '/' . $post['id'] . '.json', $data, $post, '', null);
+                writeExtraction(EXT_DIR.'/'.$post['id'].'.json', $data, $post, '', null);
                 $ditolak++;
                 $done++;
 
@@ -1211,11 +1235,11 @@ function cmdExtract(array $argv): void
             continue;
         }
 
-        if (!$noGate && $verdict !== null && $verdict['post_kind'] !== 'package_offer') {
+        if (! $noGate && $verdict !== null && $verdict['post_kind'] !== 'package_offer') {
             // Ditolak di gerbang: simpan alasan + transkripnya saja. Penyusun tidak
             // dipanggil, dan `packages:import --prune` yang mengecualikan + memindahkannya.
             $data = ['post_kind' => $verdict['post_kind'], '_rejected_by' => 'vision'];
-            writeExtraction(EXT_DIR . '/' . $post['id'] . '.json', $data, $post, $verdict['flyer_text'], null);
+            writeExtraction(EXT_DIR.'/'.$post['id'].'.json', $data, $post, $verdict['flyer_text'], null);
             $ditolak++;
             $done++;
 
@@ -1245,11 +1269,11 @@ function cmdExtract(array $argv): void
                 'text' => trim(implode("\n", array_column($verdict['slides'], 'text'))),
                 'is_offer' => true,
             ]];
-            out('  gerbang dilewati (--no-gate): transkrip ' . count($verdict['slides']) . ' gambar + caption -> 1 penyusunan');
+            out('  gerbang dilewati (--no-gate): transkrip '.count($verdict['slides']).' gambar + caption -> 1 penyusunan');
         }
 
         foreach ($offers as $offer) {
-            $file  = slideFile($sent, $offer['n']);
+            $file = slideFile($sent, $offer['n']);
             $label = count($offers) > 1 ? "{$post['id']}-{$offer['n']}" : $post['id'];
 
             out(sprintf(
@@ -1260,9 +1284,20 @@ function cmdExtract(array $argv): void
                 strlen($offer['text']),
             ));
 
-            $data = callExtractor($models, $caption, $offer['text'], $post['timestamp'] ?? null);
+            // Satu slide yang gagal jangan menjatuhkan slide lain di post yang sama.
+            // Flyer jadwal bisa 11 gambar penawaran; sampai 2026-07-31 exception di
+            // slide ke-3 membuang delapan sisanya — dan file slide 1-2 yang kadung
+            // ditulis bikin extract berikutnya melewati postnya, jadi kehilangannya
+            // permanen. Yang gagal diambil lagi lewat tombol "baca ulang" per kartu.
+            try {
+                $data = callExtractor($models, $caption, $offer['text'], $post['timestamp'] ?? null);
+            } catch (RuntimeException $e) {
+                out("  $label GAGAL: ".$e->getMessage());
+
+                continue;
+            }
             $data = writeExtraction(
-                EXT_DIR . "/$label.json",
+                EXT_DIR."/$label.json",
                 $data,
                 $post,
                 $offer['text'] ?: ($verdict['flyer_text'] ?? ''),
@@ -1272,9 +1307,9 @@ function cmdExtract(array $argv): void
 
             out(sprintf('  %-24s %s%s', $label, $data['_missing'] === []
                 ? 'OK'
-                : 'kurang: ' . implode(',', $data['_missing']),
+                : 'kurang: '.implode(',', $data['_missing']),
                 count($data['departures'] ?? []) > 1
-                    ? ' · ' . count($data['departures']) . ' keberangkatan'
+                    ? ' · '.count($data['departures']).' keberangkatan'
                     : ''));
         }
     }
@@ -1289,7 +1324,7 @@ function cmdExtract(array $argv): void
  * gambar yang hash-nya sudah pernah diproses tidak ikut dikirim, jadi nomornya
  * bisa bergeser. Nomor ngawur -> null, barisnya tampil tanpa flyer.
  *
- * @param  array<int, string> $sent
+ * @param  array<int, string>  $sent
  */
 function slideFile(array $sent, int $n): ?string
 {
@@ -1316,7 +1351,7 @@ function claimImages(string $dir, array $post): array
     $fh = fopen(HASH_FILE, 'c+');
     flock($fh, LOCK_EX);
 
-    $raw    = stream_get_contents($fh);
+    $raw = stream_get_contents($fh);
     $hashes = $raw === '' ? [] : (json_decode($raw, true) ?: []);
 
     $keep = [];
@@ -1332,7 +1367,7 @@ function claimImages(string $dir, array $post): array
             continue;
         }
         $hashes[$hash] = $post['id'];
-        $keep[$name]   = $bytes;
+        $keep[$name] = $bytes;
     }
 
     ftruncate($fh, 0);
@@ -1354,21 +1389,21 @@ function claimImages(string $dir, array $post): array
  */
 function writeExtraction(string $target, array $data, array $post, string $flyerText, ?string $flyerFile): array
 {
-    $data['_media_id']    = $post['id'];
-    $data['_permalink']   = $post['permalink'] ?? null;
-    $data['_source']      = $post['_source_account'];
-    $data['_posted_at']   = $post['timestamp'] ?? null;
+    $data['_media_id'] = $post['id'];
+    $data['_permalink'] = $post['permalink'] ?? null;
+    $data['_source'] = $post['_source_account'];
+    $data['_posted_at'] = $post['timestamp'] ?? null;
     // Transkrip ikut disimpan: kalau harga meleset, ketahuan salahnya di mata (vision)
     // atau di penyusun (teks), tanpa perlu panggil ulang.
-    $data['_flyer_text']  = $flyerText ?: null;
+    $data['_flyer_text'] = $flyerText ?: null;
     $data['_used_vision'] = $flyerText !== '';
     $data['_useful_images'] = $flyerFile !== null ? [$flyerFile] : [];
-    $data['_missing']     = missingFields($data);
+    $data['_missing'] = missingFields($data);
     $data['_needs_review'] = $data['_missing'] !== []
         || ($data['confidence']['price'] ?? 0) < PRICE_CONFIDENCE_FLOOR;
 
     file_put_contents($target, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-    out('    tulis storage/extracted/' . basename($target));
+    out('    tulis storage/extracted/'.basename($target));
 
     return $data;
 }
@@ -1455,7 +1490,7 @@ function readCaption(array $models, string $caption): ?string
     } catch (RuntimeException $e) {
         // Semua model mati: pra-gerbang ini opsional, jangan menahan post yang
         // sebenarnya bisa dibaca vision.
-        out('  pra-gerbang gagal (' . $e->getMessage() . ') — lanjut ke vision');
+        out('  pra-gerbang gagal ('.$e->getMessage().') — lanjut ke vision');
 
         return null;
     }
@@ -1530,7 +1565,6 @@ Balas HANYA satu objek JSON, dengan satu entri `slides` per gambar yang dikirim:
 {"post_kind":"...","slides":[{"n":1,"has_price":true,"has_date":true,"has_duration":true,"text":"..."}]}
 TXT;
 
-
 /**
  * Mata sekaligus hakim: model vision menyalin teks flyer DAN memutuskan post_kind.
  * Yang menyusun data tetap model teks — di sini tidak ada field paket satu pun.
@@ -1539,15 +1573,72 @@ TXT;
  * pixel. Caption travel sering cuma emoji + "chat admin", jadi penyusun yang
  * menilai dari teks saja itu menebak.
  *
- * Carousel dikirim sebagai satu unit dalam satu call.
+ * Carousel dikirim sebagai satu unit — sampai batas `VISION_CHUNK` gambar per call.
  *
- * @return array{post_kind: string, flyer_text: string}
+ * Batasnya ada karena satu call yang kegedean bukan cuma lambat, tapi **gagal
+ * seluruhnya**: terukur 2026-07-31, carousel 4 gambar (1,9 MB base64) balas HTTP 200
+ * dalam 9,0 detik, sementara carousel 14 gambar (5,4 MB) enam kali berturut-turut
+ * kena `Operation timed out after 60002 ms with 0 bytes received`, dan sekali yang
+ * lolos pun balas 89,5 KB yang di-parse jadi 0 slide (terpotong) — jadi postnya
+ * tidak pernah divonis dan tidak pernah jadi paket. Yang mengikat ukuran payload
+ * DAN panjang balasan; dua-duanya turun kalau gambarnya dipotong.
+ *
+ * Mengecilkan gambarnya bukan jalan keluar: flyer IG sudah 1024x1280–1080x1350,
+ * jadi downscale ke ambang mana pun yang teksnya masih terbaca = no-op.
+ *
+ * Yang dibayar tambahan cuma prompt + caption per potongan (teks, murah); token
+ * gambarnya sama saja. Carousel ≤ `VISION_CHUNK` tetap satu call seperti dulu.
+ *
+ * @return array{post_kind: string, slides: array<int, array{n: int, text: string, is_offer: bool}>, flyer_text: string}
  */
 function readFlyer(array $images, string $caption = ''): array
 {
+    $per = max(1, (int) (env('VISION_CHUNK') ?: 5));
+    $potongan = array_chunk($images, $per);
+    if (count($potongan) < 2) {
+        return lihatFlyer($images, $caption);
+    }
+
+    out(sprintf('  %d gambar dipotong jadi %d call vision (VISION_CHUNK=%d)', count($images), count($potongan), $per));
+
+    $slides = [];
+    $kind = 'other';
+    foreach ($potongan as $i => $chunk) {
+        $bagian = lihatFlyer($chunk, $caption, $i * $per);
+
+        // Satu potongan tidak terbaca = seluruh postnya belum divonis. Balik
+        // `slides` kosong supaya cmdExtract melewatinya tanpa menulis apa pun —
+        // aturan yang sama dengan balasan rusak di call tunggal. Menyimpan yang
+        // separuh justru mengunci: filenya ada, jadi extract berikutnya melewatinya
+        // dan gambar yang tidak terbaca itu hilang selamanya.
+        if ($bagian['slides'] === []) {
+            out('  vision: potongan '.($i + 1).' dari '.count($potongan).' tidak terbaca — seluruh post dicoba lagi nanti');
+
+            return ['post_kind' => 'other', 'slides' => [], 'flyer_text' => ''];
+        }
+
+        $slides = array_merge($slides, $bagian['slides']);
+        if ($kind !== 'package_offer') {
+            $kind = $bagian['post_kind'] === 'other' ? $kind : $bagian['post_kind'];
+        }
+    }
+
+    return [
+        'post_kind' => $kind,
+        'slides' => $slides,
+        'flyer_text' => implode("\n", array_map(
+            fn ($s) => "--- gambar {$s['n']} ---\n{$s['text']}",
+            $slides,
+        )),
+    ];
+}
+
+/** Satu call vision. `$offset` = berapa gambar sudah dikirim di potongan sebelumnya. */
+function lihatFlyer(array $images, string $caption, int $offset = 0): array
+{
     $content = [];
     foreach ($images as $b64) {
-        $content[] = ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,' . $b64]];
+        $content[] = ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,'.$b64]];
     }
     // Caption ikut dikirim sebagai konteks: angka yang buram di flyer sering
     // tertulis jelas di caption (daftar jadwal, kurs, nama hotel lengkap).
@@ -1559,19 +1650,20 @@ function readFlyer(array $images, string $caption = ''): array
 
     $models = envList(env('VISION_MODEL'), 'gemini/gemini-3.1-flash-lite-preview');
     out(sprintf(
-        '  POST %s model=%s (%d gambar, %.1f KB base64) -> transkrip',
+        '  POST %s model=%s (%d gambar%s, %.1f KB base64) -> transkrip',
         parse_url(routerUrl(), PHP_URL_HOST),
         implode('|', $models),
         count($images),
+        $offset ? ' mulai #'.($offset + 1) : '',
         array_sum(array_map('strlen', $images)) / 1024,
     ));
 
     $teks = llmPostAny($models, [
-        'messages'        => [['role' => 'user', 'content' => $content]],
+        'messages' => [['role' => 'user', 'content' => $content]],
         'response_format' => ['type' => 'json_object'],
     ]);
 
-    return visionVerdict(jsonOf($teks));
+    return visionVerdict(jsonOf($teks), $offset);
 }
 
 /**
@@ -1581,7 +1673,7 @@ function readFlyer(array $images, string $caption = ''): array
  *
  * @return array{post_kind: string, flyer_text: string}
  */
-function visionVerdict(array $out): array
+function visionVerdict(array $out, int $offset = 0): array
 {
     $kind = (string) ($out['post_kind'] ?? '');
 
@@ -1593,9 +1685,12 @@ function visionVerdict(array $out): array
         if ($n < 1) {
             continue;
         }
+        // Model menomori gambar dalam potongan yang DIA terima (1..k); yang dipakai
+        // hilir (`$sent[$n-1]`, `flyer_index`) nomor gambar di postnya.
+        $n += $offset;
         $slides[$n] = [
-            'n'        => $n,
-            'text'     => trim((string) ($slide['text'] ?? '')),
+            'n' => $n,
+            'text' => trim((string) ($slide['text'] ?? '')),
             'is_offer' => ($slide['has_price'] ?? false)
                 && ($slide['has_date'] ?? false)
                 && ($slide['has_duration'] ?? false),
@@ -1607,8 +1702,8 @@ function visionVerdict(array $out): array
     $adaPenawaran = array_filter($slides, fn ($s) => $s['is_offer']) !== [];
 
     return [
-        'post_kind' => ($kind === 'package_offer' && !$adaPenawaran) ? 'promo_generic' : ($kind ?: 'other'),
-        'slides'    => $slides,
+        'post_kind' => ($kind === 'package_offer' && ! $adaPenawaran) ? 'promo_generic' : ($kind ?: 'other'),
+        'slides' => $slides,
         // Transkrip gabungan, cuma untuk audit — penyusun dikirimi teks per gambar.
         'flyer_text' => implode("\n", array_map(
             fn ($s) => "--- gambar {$s['n']} ---\n{$s['text']}",
@@ -1646,7 +1741,7 @@ function envList(?string $raw, string $default): array
 {
     // Kutip luar dilepas: JSON di .env wajib dikutip supaya parser Laravel tidak
     // tersandung spasi di dalam daftarnya.
-    $raw  = trim((string) ($raw ?? $default), " \t\n\r\"'");
+    $raw = trim((string) ($raw ?? $default), " \t\n\r\"'");
     $list = str_starts_with($raw, '[') ? json_decode($raw, true) : [$raw];
     $list = array_values(array_filter(array_map(
         fn ($m) => trim((string) $m),
@@ -1663,14 +1758,14 @@ function envList(?string $raw, string $default): array
  * yang galat dilewat ke sesudahnya. Kalau semuanya mati, galat terakhir dilempar —
  * itu memang harus berisik.
  *
- * @param string[] $models
+ * @param  string[]  $models
  */
 function llmPostAny(array $models, array $payload): string
 {
     static $giliran = 0;
 
     $geser = $giliran++ % count($models);
-    $urut  = array_merge(array_slice($models, $geser), array_slice($models, 0, $geser));
+    $urut = array_merge(array_slice($models, $geser), array_slice($models, 0, $geser));
 
     foreach ($urut as $i => $model) {
         try {
@@ -1679,7 +1774,7 @@ function llmPostAny(array $models, array $payload): string
             if ($i === count($urut) - 1) {
                 throw $e;
             }
-            out("    $model gagal: " . substr($e->getMessage(), 0, 120) . " — coba {$urut[$i + 1]}");
+            out("    $model gagal: ".substr($e->getMessage(), 0, 120)." — coba {$urut[$i + 1]}");
         }
     }
 
@@ -1692,14 +1787,14 @@ function llmPostAny(array $models, array $payload): string
  */
 function callExtractor(array $models, string $caption, string $flyerText, ?string $postedAt = null): array
 {
-    $prompt = "Caption postingan:\n\n" . ($caption === '' ? '(kosong)' : $caption);
+    $prompt = "Caption postingan:\n\n".($caption === '' ? '(kosong)' : $caption);
     if ($flyerText !== '') {
         $prompt .= "\n\nTeks yang terbaca di flyer:\n\n$flyerText";
     }
     // Flyer sering menulis "14 Maret" tanpa tahun. Tanpa jangkar ini model menebak
     // tahun berjalan dan paket 2027 masuk sebagai 2026 — lolos filter ambang.
     if ($postedAt !== null) {
-        $prompt .= "\n\nTanggal posting: " . substr($postedAt, 0, 10);
+        $prompt .= "\n\nTanggal posting: ".substr($postedAt, 0, 10);
     }
 
     // Router mengabaikan `json_schema` (diuji 2026-07-29: prompt prosa tetap dibalas
@@ -1707,9 +1802,9 @@ function callExtractor(array $models, string $caption, string $flyerText, ?strin
     $payload = [
         'messages' => [
             [
-                'role'    => 'system',
-                'content' => SYSTEM_PROMPT . "\n\nBalas HANYA satu objek JSON yang patuh pada JSON Schema ini:\n"
-                    . json_encode(extractionSchema(), JSON_UNESCAPED_SLASHES),
+                'role' => 'system',
+                'content' => SYSTEM_PROMPT."\n\nBalas HANYA satu objek JSON yang patuh pada JSON Schema ini:\n"
+                    .json_encode(extractionSchema(), JSON_UNESCAPED_SLASHES),
             ],
             ['role' => 'user', 'content' => $prompt],
         ],
@@ -1727,18 +1822,18 @@ function llmPost(string $url, string $key, array $payload): string
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => (int) (env('AI_TIMEOUT') ?: 60),
-            CURLOPT_POST           => true,
+            CURLOPT_TIMEOUT => (int) (env('AI_TIMEOUT') ?: 60),
+            CURLOPT_POST => true,
             // Router suka memutus stream h2 di tengah balasan panjang
             // ("INTERNAL_ERROR (err 2)"). HTTP/1.1 tidak punya multiplexing yang
             // bisa direset sepihak begitu; satu koneksi satu request.
-            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Authorization: Bearer ' . $key],
-            CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer '.$key],
+            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
         ]);
-        $body  = curl_exec($ch);
-        $code  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err   = curl_error($ch);
+        $body = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
         $errno = curl_errno($ch);
         curl_close($ch);
 
@@ -1756,8 +1851,9 @@ function llmPost(string $url, string $key, array $payload): string
         if ($body === false) {
             if ($try < 1) {
                 $jeda = $errno === CURLE_OPERATION_TIMEDOUT ? 0 : 1;
-                out("    $err — ulangi " . ($jeda ? "dalam {$jeda}s" : 'seketika (key baru)'));
+                out("    $err — ulangi ".($jeda ? "dalam {$jeda}s" : 'seketika (key baru)'));
                 $jeda && sleep($jeda);
+
                 continue;
             }
             throw new RuntimeException("curl gagal: $err");
@@ -1775,6 +1871,7 @@ function llmPost(string $url, string $key, array $payload): string
                 $wait,
             ));
             sleep($wait);
+
             continue;
         }
 
@@ -1791,15 +1888,16 @@ function llmPost(string $url, string $key, array $payload): string
 
         if ($code !== 200) {
             $json = json_decode($body, true);
-            throw new RuntimeException("LLM HTTP $code: " . ($json['error']['message'] ?? substr($body, 0, 500)));
+            throw new RuntimeException("LLM HTTP $code: ".($json['error']['message'] ?? substr($body, 0, 500)));
         }
 
         $teks = llmContent((string) $body);
         // Balasan kosong bukan "tidak ada data": router pernah balas 200 dengan galat
         // di badan, dan itu harus berisik, bukan jadi paket tanpa field.
         if (trim($teks) === '') {
-            throw new RuntimeException('LLM balas kosong: ' . substr((string) $body, 0, 300));
+            throw new RuntimeException('LLM balas kosong: '.substr((string) $body, 0, 300));
         }
+
         return $teks;
     }
 }
@@ -1817,6 +1915,7 @@ function llmContent(string $body): string
 
     if (is_array($json = json_decode($body, true))) {
         $c = ($json['data'] ?? $json)['choices'][0] ?? [];
+
         return (string) ($c['message']['content'] ?? $c['delta']['content'] ?? '');
     }
 
@@ -1826,12 +1925,13 @@ function llmContent(string $body): string
         if (str_starts_with($baris, 'data:')) {
             $baris = trim(substr($baris, 5));
         }
-        if ($baris === '' || $baris === '[DONE]' || !is_array($j = json_decode($baris, true))) {
+        if ($baris === '' || $baris === '[DONE]' || ! is_array($j = json_decode($baris, true))) {
             continue;
         }
         $c = ($j['data'] ?? $j)['choices'][0] ?? [];
         $teks .= (string) ($c['delta']['content'] ?? $c['message']['content'] ?? '');
     }
+
     return $teks;
 }
 
@@ -1847,6 +1947,7 @@ function missingFields(array $data): array
             $missing[] = $field;
         }
     }
+
     return $missing;
 }
 
@@ -1854,15 +1955,15 @@ function cmdSelftest(): void
 {
     $full = [
         'departure_date' => '2026-03-14',
-        'duration_days'  => 9,
+        'duration_days' => 9,
         'departure_city' => 'Jakarta',
-        'price_tiers'    => [['occupancy' => 'quad', 'amount' => 25900000, 'currency' => 'IDR', 'is_starting_from' => false]],
+        'price_tiers' => [['occupancy' => 'quad', 'amount' => 25900000, 'currency' => 'IDR', 'is_starting_from' => false]],
     ];
     assert(missingFields($full) === [], 'post lengkap harusnya lolos');
 
     // price_tiers kosong = array kosong, bukan null. Harus tetap terhitung kurang.
     assert(missingFields(['departure_date' => '2026-03', 'duration_days' => 9,
-                          'departure_city' => 'Jakarta', 'price_tiers' => []]) === ['price_tiers']);
+        'departure_city' => 'Jakarta', 'price_tiers' => []]) === ['price_tiers']);
 
     // Field hilang total (key ga ada) juga harus kedetek.
     assert(missingFields([]) === REQUIRED_FIELDS);
@@ -1871,7 +1972,7 @@ function cmdSelftest(): void
     assert(missingFields(['departure_date' => '2026-03'] + $full) === []);
 
     // Angka 0 jangan dianggap kosong (duration_days 0 itu data salah, tapi bukan "hilang").
-    assert(!in_array('duration_days', missingFields(['duration_days' => 0] + $full), true));
+    assert(! in_array('duration_days', missingFields(['duration_days' => 0] + $full), true));
 
     // Pra-gerbang caption: fail-open di semua cabang yang tidak tegas menolak.
     assert(captionGate(['keputusan' => 'tolak', 'post_kind' => 'testimonial']) === 'testimonial');
@@ -1937,7 +2038,7 @@ function cmdSelftest(): void
 
     // guide_name diekstrak tapi TIDAK menggeser gate — banyak paket memang tanpa pembimbing.
     assert(isset($schema['properties']['guide_name']));
-    assert(!in_array('guide_name', REQUIRED_FIELDS, true), 'guide_name jangan masuk gate');
+    assert(! in_array('guide_name', REQUIRED_FIELDS, true), 'guide_name jangan masuk gate');
     assert(missingFields(['guide_name' => null] + $full) === [], 'guide_name kosong tetap lolos');
 
     // Gerbang vision: yang dipercaya penandanya, bukan labelnya. Dinilai per gambar.
@@ -1966,6 +2067,15 @@ function cmdSelftest(): void
     ]]);
     assert(array_column($campur['slides'], 'n') === [1, 2, 3], 'slide wajib urut nomor gambar');
     assert(array_column($campur['slides'], 'is_offer') === [true, true, false], 'penawaran dinilai per gambar');
+
+    // Carousel yang dipotong: model menomori 1..k per potongan, offset yang
+    // mengembalikannya ke nomor gambar di post. Salah di sini = flyer_index
+    // meleset dan kartunya memajang gambar tetangganya.
+    $potongan2 = visionVerdict(['post_kind' => 'package_offer', 'slides' => [
+        ['n' => 1, 'has_price' => true, 'has_date' => true, 'has_duration' => true],
+        ['n' => 2, 'has_price' => true, 'has_date' => true, 'has_duration' => true],
+    ]], 5);
+    assert(array_column($potongan2['slides'], 'n') === [6, 7], 'nomor slide digeser sejumlah gambar potongan sebelumnya');
     assert(str_contains($campur['flyer_text'], '--- gambar 3 ---'), 'transkrip audit tetap memuat semua gambar');
 
     // Daftar model: satu nama, JSON array, atau isi ngawur -> tetap ada yang dipakai.
@@ -2002,9 +2112,9 @@ function cmdSelftest(): void
     assert(llmContent('{"choices":[{"message":{"content":"c"}}]}data: [DONE]') === 'c', '[DONE] dilem di ekor');
     assert(llmContent(
         "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"
-        . "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"a\\\":\"}}]}\n\n"
-        . "data: {\"choices\":[{\"delta\":{\"content\":\"1}\"}}]}\n\n"
-        . "data: [DONE]\n"
+        ."data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"a\\\":\"}}]}\n\n"
+        ."data: {\"choices\":[{\"delta\":{\"content\":\"1}\"}}]}\n\n"
+        ."data: [DONE]\n"
     ) === '{"a":1}', 'SSE digabung, [DONE] dilewat');
 
     out('selftest OK');
@@ -2019,6 +2129,7 @@ function optval(array $argv, string $name): ?string
             return substr($arg, strlen($name) + 3);
         }
     }
+
     return null;
 }
 
@@ -2026,26 +2137,26 @@ $cmd = $argv[1] ?? 'help';
 
 try {
     match ($cmd) {
-        'auth'     => cmdAuth($argv),
-        'fetch'    => cmdFetch($argv),
+        'auth' => cmdAuth($argv),
+        'fetch' => cmdFetch($argv),
         'fetchall' => cmdFetchAll($argv),
-        'profile'  => cmdProfile($argv),
-        'quota'    => cmdQuota($argv),
-        'seed'     => cmdSeed($argv),
-        'extract'  => cmdExtract($argv),
+        'profile' => cmdProfile($argv),
+        'quota' => cmdQuota($argv),
+        'seed' => cmdSeed($argv),
+        'extract' => cmdExtract($argv),
         'selftest' => cmdSelftest(),
-        default    => out(
-            "php probe.php auth <short_lived_user_token>\n" .
-            "php probe.php fetch <username> [--limit=50]\n" .
-            "php probe.php fetchall [accounts.txt] [--limit=50] [--sleep=3] [--retry]\n" .
-            "php probe.php profile <username> [username…] [--sleep=3]\n" .
-            "php probe.php quota\n" .
-            "php probe.php seed <dir>\n" .
-            "php probe.php extract [--limit=200] [--force]\n" .
-            "php probe.php selftest"
+        default => out(
+            "php probe.php auth <short_lived_user_token>\n".
+            "php probe.php fetch <username> [--limit=50]\n".
+            "php probe.php fetchall [accounts.txt] [--limit=50] [--sleep=3] [--retry]\n".
+            "php probe.php profile <username> [username…] [--sleep=3]\n".
+            "php probe.php quota\n".
+            "php probe.php seed <dir>\n".
+            "php probe.php extract [--limit=200] [--force]\n".
+            'php probe.php selftest'
         ),
     };
 } catch (Throwable $e) {
-    fwrite(STDERR, 'ERROR: ' . $e->getMessage() . "\n");
+    fwrite(STDERR, 'ERROR: '.$e->getMessage()."\n");
     exit(1);
 }

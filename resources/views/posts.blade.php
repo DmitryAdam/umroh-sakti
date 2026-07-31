@@ -15,12 +15,10 @@
     @else
         <strong class="text-sm">Semua post</strong>
     @endif
-    <a href="{{ route('posts.create') }}" class="ml-auto underline">+ tambah post manual</a>
+    <a href="{{ route('suggestions') }}" class="ml-auto underline">+ usulkan post</a>
 </div>
 
-@if (session('status'))
-    <p class="mb-3 rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{{ session('status') }}</p>
-@endif
+@include('partials.flash')
 
 {{-- Jejak fetch terakhir akun ini apa adanya dari storage/pipeline.jsonl: post mana
      yang dilewat dan kenapa (VIDEO tanpa gambar / sudah dikecualikan / sudah ada di
@@ -49,7 +47,7 @@
      satu markup melayani kedua ruang lingkup. Angka `terunduh`/`ditolak` di tabel
      akun menunjuk langsung ke tabnya. --}}
 <div class="mb-3 flex flex-wrap gap-1 text-xs">
-    @foreach ([null => 'semua', 'packages' => 'jadi paket', 'rejected' => 'ditolak', 'pending' => 'menunggu'] as $key => $label)
+    @foreach ([null => 'semua', 'packages' => 'jadi paket', 'rejected' => 'ditolak', 'pending' => 'menunggu', 'suggestions' => 'usulan'] as $key => $label)
         <a href="{{ request()->fullUrlWithQuery(['filter' => $key, 'page' => null]) }}"
            class="rounded border px-2 py-1 {{ $f === $key ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300 text-stone-600 hover:bg-stone-50' }}">
             {{ $label }} <span class="tabular-nums opacity-70">{{ $jumlah[$key] }}</span>
@@ -137,12 +135,7 @@
                         </td>
                     @endunless
                     <td class="whitespace-nowrap px-2 py-1.5">
-                        @if ($post['alasan'])
-                            <span class="rounded bg-red-100 px-1.5 py-0.5 text-red-900" title="alasan di excluded_posts">{{ $post['alasan'] }}</span>
-                        @endif
-                        @if (! $post['alasan'] && $post['paket']->isEmpty())
-                            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">menunggu</span>
-                        @endif
+                        @include('partials.post-status')
                         {{-- Satu select per paket (satu post bisa jadi beberapa slide).
                              Perubahannya langsung disimpan (PATCH) tanpa tombol simpan
                              dan tanpa reload — sama seperti bar aksi kartu di `/`. --}}
@@ -178,16 +171,20 @@
                         @if ($post['timestamp'])
                             {{ \Illuminate\Support\Carbon::parse($post['timestamp'])->format('d M Y') }}
                         @endif
+                        {{-- Asal post: null = hasil scrap, terisi = dimasukkan tangan. --}}
+                        <div class="text-xs" title="{{ $post['oleh'] ? 'dimasukkan tangan oleh '.$post['oleh'] : 'hasil scrap otomatis' }}">
+                            {{ $post['oleh'] ?? 'scrap' }}
+                        </div>
                     </td>
                     <td class="px-2 py-1.5">
                         {{-- Baca ulang: blok `excluded_posts` dilepas, hasil bacaan lama
                              dibuang, lalu gambar + caption dikirim lagi ke AI. Status
                              hasil review manusia untuk post ini ikut hilang. --}}
                         <form method="POST" action="{{ route('posts.reextract', $post['media_id']) }}"
-                              onsubmit="return confirm('Baca ulang post ini pakai AI? Blok penolakan dilepas dan paket lamanya dibikin ulang.')">
+                              onsubmit="return confirm('{{ $post['usulan'] ? 'Setujui usulan ini dan baca pakai AI?' : 'Baca ulang post ini pakai AI? Blok penolakan dilepas dan paket lamanya dibikin ulang.' }}')">
                             @csrf
                             <button type="submit" class="whitespace-nowrap rounded border border-stone-300 px-2 py-1 text-stone-600 hover:bg-stone-50"
-                                    title="lepas blok, kirim gambar + caption ke AI lagi, lalu bikin paketnya">baca ulang AI</button>
+                                    title="lepas blok, kirim gambar + caption ke AI lagi, lalu bikin paketnya">{{ $post['usulan'] ? 'setujui & baca' : 'baca ulang AI' }}</button>
                         </form>
                     </td>
                 </tr>
@@ -212,75 +209,8 @@
     </div>
 @endif
 
-<script>
-// Centang -> bar aksi. Checkbox-nya milik form #bulk lewat atribut `form=`, jadi
-// JS di sini cuma tampilan + konfirmasi; submitnya form biasa.
-const pilih = () => [...document.querySelectorAll('[data-pilih]')];
-const bulkBar = document.querySelector('[data-bulk]');
-const terpilih = () => pilih().filter((c) => c.checked);
-const tabel = document.querySelector('table');
-
-const sinkron = () => {
-    const n = terpilih().length;
-    bulkBar.classList.toggle('hidden', n === 0);
-    bulkBar.classList.toggle('flex', n > 0);
-    bulkBar.querySelector('[data-terpilih]').textContent = n;
-    document.querySelector('[data-semua]').checked = n > 0 && n === pilih().length;
-};
-
-tabel.addEventListener('change', (e) => {
-    if (e.target.matches('[data-semua]')) pilih().forEach((c) => { c.checked = e.target.checked; });
-    if (e.target.matches('[data-pilih],[data-semua]')) sinkron();
-});
-
-// Shift-klik = pilih serentetan; tidak ada bawaannya, jangkarnya disimpan sendiri.
-let jangkar = null;
-tabel.addEventListener('click', (e) => {
-    const c = e.target.closest('[data-pilih]');
-    if (!c) return;
-    const baris = pilih();
-    const i = baris.indexOf(c);
-    if (e.shiftKey && jangkar !== null) {
-        window.getSelection().removeAllRanges();
-        for (let k = Math.min(jangkar, i); k <= Math.max(jangkar, i); k++) baris[k].checked = c.checked;
-    }
-    jangkar = i;
-    sinkron();
-});
-
-bulkBar.querySelector('[data-batal-pilih]').addEventListener('click', () => {
-    pilih().forEach((c) => { c.checked = false; });
-    sinkron();
-});
-
-// Yang tidak bisa dibatalkan (bayar model / buang file) konfirmasi dulu.
-bulkBar.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-confirm]');
-    if (b && !confirm(`${b.dataset.confirm} ${terpilih().length} post terpilih? ${b.dataset.catatan}`)) e.preventDefault();
-});
-
-// Ganti status paket = satu PATCH tanpa reload, sama seperti bar aksi kartu di `/`:
-// halaman yang dimuat ulang membuang baris yang baru dipublish dari tab yang sedang
-// dipakai, dan sisanya bergeser di tengah kerja.
-const csrf = document.querySelector('meta[name=csrf-token]').content;
-tabel.addEventListener('change', async (e) => {
-    const select = e.target.closest('[data-status]');
-    if (!select) return;
-
-    select.disabled = true;
-    try {
-        const res = await fetch(select.dataset.status, {
-            method: 'PATCH',
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf },
-            body: JSON.stringify({ status: select.value }),
-        });
-        if (!res.ok) throw new Error(res.status);
-        select.classList.remove('border-red-500');
-    } catch (err) {
-        select.classList.add('border-red-500');
-        select.title = 'gagal simpan: ' + err.message;
-    }
-    select.disabled = false;
-});
-</script>
+{{-- Centang -> bar aksi, dan select status -> PATCH tanpa reload. Dua partial
+     yang sama dipakai /accounts dan `/`. --}}
+@include('partials.bulk-select', ['satuan' => 'post', 'catatan' => ''])
+@include('partials.status-patch')
 @endsection

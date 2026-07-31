@@ -36,13 +36,43 @@
     </details>
 </div>
 
-@if (session('status'))
-    <p class="mb-3 rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{{ session('status') }}</p>
-@endif
+@include('partials.flash')
 
-@error('usernames')
-    <p class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{{ $message }}</p>
-@enderror
+{{-- Usulan akun dari peran `user`: belum di-scrap (semua jalur crawl menyaring
+     `approved`), dan yang bisa dikerjakan atasnya cuma dua — setujui atau buang.
+     Tombolnya lewat endpoint bulk yang sama dengan tabel di bawah, jadi tidak ada
+     jalur kedua yang bisa menyimpang. --}}
+@if ($pending->isNotEmpty())
+    <div class="mb-3 rounded border border-amber-300 bg-amber-50 text-xs">
+        <p class="border-b border-amber-200 px-3 py-2 text-amber-900">
+            <strong>{{ $pending->count() }} usulan akun</strong> menunggu — belum ikut di putaran scrap.
+        </p>
+        <table class="w-full">
+            <tbody class="divide-y divide-amber-200">
+                @foreach ($pending as $account)
+                    <tr>
+                        <td class="px-3 py-1.5">
+                            <a href="https://www.instagram.com/{{ $account->username }}" target="_blank" rel="noopener"
+                               class="font-medium underline">{{ '@'.$account->username }}</a>
+                        </td>
+                        <td class="px-3 py-1.5 text-stone-500">diusulkan {{ $account->suggested_by ?? '—' }}</td>
+                        <td class="whitespace-nowrap px-3 py-1.5 text-right">
+                            <form method="POST" action="{{ route('accounts.bulk') }}" class="inline">
+                                @csrf
+                                <input type="hidden" name="ids[]" value="{{ $account->id }}">
+                                <button name="action" value="approve"
+                                        class="rounded border border-stone-300 bg-white px-2 py-0.5 hover:bg-stone-100">setujui</button>
+                                <button name="action" value="delete"
+                                        onclick="return confirm('Buang usulan {{ '@'.$account->username }}?')"
+                                        class="rounded px-1 leading-none text-stone-400 hover:bg-red-600 hover:text-white">&times;</button>
+                            </form>
+                        </td>
+                    </tr>
+                @endforeach
+            </tbody>
+        </table>
+    </div>
+@endif
 
 {{-- Form tambah akun di <dialog>: jarang dipakai, tapi textarea-nya makan satu
      baris penuh di atas daftar. Esc & fokus ditangani browser, tanpa library. --}}
@@ -455,59 +485,6 @@ const ulangi = async (queue) => {
     }
 };
 
-// Bulk: centang -> tiga tombol. Checkbox-nya milik form #bulk lewat atribut
-// `form=`, jadi JS di sini cuma soal tampilan (bar muncul, angka, pilih semua)
-// dan konfirmasi — submit-nya tetap form biasa.
-const pilih   = () => [...document.querySelectorAll('[data-pilih]')];
-const bulkBar = document.querySelector('[data-bulk]');
-const terpilih = () => pilih().filter((c) => c.checked);
-
-const sinkron = () => {
-    const n = terpilih().length;
-    bulkBar.classList.toggle('hidden', n === 0);
-    bulkBar.classList.toggle('flex', n > 0);
-    bulkBar.querySelector('[data-terpilih]').textContent = n;
-    document.querySelector('[data-semua]').checked = n > 0 && n === pilih().length;
-};
-
-const tabel = document.querySelector('table');
-
-tabel.addEventListener('change', (e) => {
-    if (e.target.matches('[data-semua]')) pilih().forEach((c) => { c.checked = e.target.checked; });
-    if (e.target.matches('[data-pilih],[data-semua]')) sinkron();
-});
-
-// Shift-klik = pilih serentetan. Tidak ada bawaannya di HTML: checkbox tidak
-// saling kenal, jadi jangkarnya (baris yang diklik terakhir) disimpan sendiri.
-// Urutan barisnya ikut `?sort=`, dan `pilih()` membacanya ulang tiap klik —
-// yang dipakai urutan yang sedang kelihatan, bukan urutan saat halaman dimuat.
-let jangkar = null;
-tabel.addEventListener('click', (e) => {
-    const c = e.target.closest('[data-pilih]');
-    if (!c) return;
-    const baris = pilih();
-    const i = baris.indexOf(c);
-    if (e.shiftKey && jangkar !== null) {
-        // Shift di dalam tabel menyorot teks; sorotannya menutupi baris yang
-        // baru saja ikut tercentang.
-        window.getSelection().removeAllRanges();
-        for (let k = Math.min(jangkar, i); k <= Math.max(jangkar, i); k++) baris[k].checked = c.checked;
-    }
-    jangkar = i;
-    sinkron();
-});
-bulkBar.querySelector('[data-batal-pilih]').addEventListener('click', () => {
-    pilih().forEach((c) => { c.checked = false; });
-    sinkron();
-});
-// Tombol yang akibatnya tidak bisa dibatalkan (buang data / bayar model) konfirmasi
-// dulu, menyebut jumlah + akibatnya. `data-catatan` menimpa akibat defaultnya.
-bulkBar.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-confirm]');
-    const catatan = b?.dataset.catatan ?? 'Paketnya ikut dihapus.';
-    if (b && !confirm(`${b.dataset.confirm} ${terpilih().length} akun terpilih? ${catatan}`)) e.preventDefault();
-});
-
 batal.addEventListener('click', () => batalkan(null));
 // Tombol per antrian ikut dirender ulang tiap polling, jadi listenernya di induknya.
 now.addEventListener('click', (e) => {
@@ -518,4 +495,7 @@ now.addEventListener('click', (e) => {
     if (u) ulangi(u.dataset.ulangiQ);
 });
 </script>
+
+{{-- Centang -> bar aksi. Partial yang sama dipakai /posts. --}}
+@include('partials.bulk-select', ['satuan' => 'akun', 'catatan' => 'Paketnya ikut dihapus.'])
 @endsection

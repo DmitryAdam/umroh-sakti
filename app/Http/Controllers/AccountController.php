@@ -60,6 +60,9 @@ class AccountController extends Controller
         // Blocklist dipisah dari daftar kerja: barisnya cuma penjaga supaya
         // username yang sama ditolak saat dimasukkan lagi, datanya sudah dibuang.
         [$blocked, $accounts] = $accounts->partition->isBlocked();
+        // Usulan peran `user` juga dipisah: belum boleh di-scrap, dan yang perlu
+        // dikerjakan atasnya cuma satu — setujui atau buang.
+        [$pending, $accounts] = $accounts->partition(fn (SourceAccount $a) => $a->status === 'pending');
 
         // Diurut di PHP, bukan di SQL: tiga kolomnya (terunduh/paket/ditolak) dihitung
         // dari disk + tabel lain, jadi tidak ada kolom yang bisa di-ORDER BY. 197 baris,
@@ -92,6 +95,7 @@ class AccountController extends Controller
             'accounts' => $accounts,
             'isi' => $isi,
             'blocked' => $blocked->values(),
+            'pending' => $pending->values(),
             'posts' => $posts,
             'packages' => $packages,
             'dikecualikan' => $dikecualikan,
@@ -100,9 +104,16 @@ class AccountController extends Controller
         ]);
     }
 
-    /** Textarea (username / URL / @handle, satu per baris) -> akun approved. */
+    /**
+     * Textarea (username / URL / @handle, satu per baris) -> akun baru.
+     *
+     * Admin: langsung `approved`, ikut putaran pipeline berikutnya. Peran `user`:
+     * `pending` + email pengusulnya — semua jalur crawl menyaring `approved`, jadi
+     * usulan tidak bisa membakar kuota Graph sebelum ada yang menyetujuinya.
+     */
     public function store(Request $request): RedirectResponse
     {
+        $admin = $request->user()->isAdmin();
         $lines = preg_split('/\r?\n/', $request->validate([
             'usernames' => ['required', 'string', 'max:10000'],
         ])['usernames']);
@@ -114,10 +125,12 @@ class AccountController extends Controller
             'username', array_filter(array_map(SourceAccount::usernameOf(...), $lines)),
         )->pluck('username');
 
-        $new = SourceAccount::register($lines);
+        $new = SourceAccount::register($lines, $admin
+            ? []
+            : ['status' => 'pending', 'suggested_by' => $request->user()->email]);
 
         return back()->with('status', trim(($new
-            ? count($new).' akun baru: '.implode(', ', $new)
+            ? count($new).($admin ? ' akun baru: ' : ' akun diusulkan, menunggu admin: ').implode(', ', $new)
             : 'Tidak ada akun baru — semuanya sudah terdaftar atau barisnya tidak valid.')
             .($ditolak->isNotEmpty() ? ' Ditolak (ada di blocklist): '.$ditolak->implode(', ').'.' : '')));
     }
@@ -180,7 +193,7 @@ class AccountController extends Controller
     public function bulk(Request $request): RedirectResponse
     {
         $data = $request->validate([
-            'action' => ['required', 'in:crawl,force,block,delete'],
+            'action' => ['required', 'in:crawl,force,block,delete,approve'],
             'ids' => ['required', 'array'],
             'ids.*' => ['integer'],
         ]);
@@ -200,7 +213,12 @@ class AccountController extends Controller
 
             $kena[] = $account->username;
 
-            if ($data['action'] === 'crawl' || $data['action'] === 'force') {
+            if ($data['action'] === 'approve') {
+                // Approval usulan: statusnya saja. Scrap-nya tidak diantrikan di sini —
+                // putaran `packages:crawl` berikutnya sudah mengambil semua approved,
+                // dan tombol scrap per baris ada kalau mau sekarang.
+                $account->update(['status' => 'approved']);
+            } elseif ($data['action'] === 'crawl' || $data['action'] === 'force') {
                 // Paksa = lepas dulu post yang pernah ditolak, sisanya scrap biasa.
                 $dilepas += $data['action'] === 'force' ? $account->lupakanPenolakan() : 0;
                 FetchAccount::dispatch($account, 9);
@@ -213,6 +231,7 @@ class AccountController extends Controller
         }
 
         $pesan = match ($data['action']) {
+            'approve' => count($kena).' usulan akun disetujui — ikut di putaran scrap berikutnya.',
             'crawl' => count($kena).' akun masuk antrian ig. Pastikan `php artisan queue:work` jalan.',
             'force' => count($kena)." akun masuk antrian ig · $dilepas post yang pernah ditolak dilepas, di-download & dibaca AI lagi.",
             'block' => count($kena)." akun masuk blocklist · $paket paket dihapus, usernamenya ditolak kalau dimasukkan lagi.",

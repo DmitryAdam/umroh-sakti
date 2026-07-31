@@ -68,6 +68,16 @@ byte-nya tetap dibayar, cuma pindah tagihan.
 **Keberangkatan sebelum `config('umroh.min_departure')` tidak diambil** (default
 `2026-08-01`, ubah lewat `UMROH_MIN_DEPARTURE`). Post-nya sekalian dikecualikan.
 
+**Flyer juga syarat masuk DB** (`belumLengkap()`, reason `tanpa_gambar`). Hasil
+ekstraksi tanpa `_useful_images` lahir sebagai baris ber-`flyer_index` null:
+kartunya tampil tanpa gambar (raw-nya kadung dihapus prune) atau malah memajang
+seluruh isi carousel, dan vision tidak pernah memvonis "ini penawaran" karena tidak
+ada yang dilihat. Asalnya dua: semua gambar postnya kena dedup hash di
+`claimImages()` (flyer rebranding — jadi paketnya memang sudah ada dari post lain),
+atau jalur `probe.php seed`. Perlakuannya sama dengan tanpa harga: postnya **tidak**
+dikecualikan, filenya ditinggal di `storage/extracted`. Terukur 2026-07-31: 7 baris
+begitu, 5 di antaranya benar-benar tampil tanpa gambar.
+
 **Tanggal dan harga itu syarat masuk DB** (`belumLengkap()`, reason `tanpa_tanggal`
 / `tanpa_harga`). Tanpa salah satunya paket tidak bisa dicari, diurut, atau
 dibandingkan — itu seluruh gunanya portal ini. Tanggal minimal **bulan** (`Y-m`,
@@ -333,6 +343,27 @@ Penyusun dipanggil sekali per gambar penawaran, jadi satu carousel bisa
 menghasilkan beberapa paket. Panjang teks bukan penentu — slide dakwah sering
 lebih panjang dari flyernya.
 
+**Satu unit itu ada batasnya: `VISION_CHUNK` gambar per call** (default 5,
+`readFlyer()` memotong, `lihatFlyer()` yang memanggil). Call yang kegedean bukan
+cuma lambat, tapi **gagal seluruhnya**: terukur 2026-07-31, carousel 4 gambar
+(1,9 MB base64) balas HTTP 200 dalam 9,0 detik, sementara carousel 14 gambar
+(5,4 MB) enam kali berturut-turut kena `Operation timed out ... 0 bytes received`,
+dan sekali yang lolos malah balas 89,5 KB yang di-parse jadi 0 slide (kepotong) —
+jadi postnya tidak pernah divonis dan tidak pernah jadi paket. Dipotong jadi 3
+call: 9,6s + 9,7s + 4,6s, 12 slide terbaca, 11 penawaran.
+
+Uplink bukan penyebabnya (terukur 3,8 MB/s ke router — 5,4 MB itu ~1,4 detik) dan
+mengecilkan gambarnya juga bukan jalan keluar: flyer IG sudah 1024x1280–1080x1350,
+jadi downscale ke ambang mana pun yang teksnya masih terbaca = no-op. Yang turun
+kalau dipotong itu waktu mikir model **dan** panjang balasan.
+
+Nomor slide dari model itu nomor gambar di potongan yang **dia** terima (1..k);
+`visionVerdict($out, $offset)` yang mengembalikannya ke nomor gambar di post.
+Salah di situ = `flyer_index` meleset dan kartunya memajang gambar tetangganya.
+Satu potongan yang tidak terbaca = **seluruh** postnya balik `slides` kosong,
+aturan yang sama dengan balasan rusak di call tunggal — menyimpan yang separuh
+justru mengunci: filenya kadung ada, jadi extract berikutnya melewatinya.
+
 ## Ekstraksi
 
 Caption dulu — 60-70% info ada di sana dan jauh lebih murah. Vision hanya
@@ -376,6 +407,23 @@ Semua panggilan model lewat **9router** (`AI_API_URL`, OpenAI-compatible): satu 
 Keduanya boleh berisi **daftar JSON berkutip** (`'["ds/x","openrouter/y"]'`):
 `llmPostAny()` memakainya bergiliran (round-robin, kuota free tier kebagi) dan
 melewati model yang galat ke berikutnya; kalau semuanya mati galat terakhir dilempar.
+**Daftar itu wajib berisi lebih dari satu model — routernya menggantung, bukan
+menolak.** Terukur 2026-07-31 atas satu post 12 slide: `deepseek-flash` dan
+`ds/deepseek-v4-flash` menjawab 0 byte selama 60 detik di sekitar separuh call
+(lalu 21–51 detik saat berhasil), sementara `gemini/gemini-3.5-flash-lite`
+menjawab 2,5–4,2 detik. Dengan satu model saja, dua timeout `llmPost()` =
+exception = seluruh postnya hilang; dengan tiga, post yang sama menulis 11 hasil.
+Kandidat yang sudah diuji benar-benar melihat pixel (bukan HTTP 200 kosong):
+`gemini/gemini-3.6-flash` dan `gc/gemini-3.1-flash-lite-preview`. Yang tidak
+bisa: `gc/gemini-3-flash-preview` (404) dan seluruh provider `llm7` + `nvidia/`
+("No active credentials" / gantung 90 detik).
+
+**Satu slide yang gagal jangan menjatuhkan slide lain.** Panggilan penyusun per
+slide dibungkus try/catch di `cmdExtract()`. Tanpa itu exception di slide ke-3
+membuang delapan sisanya — dan file slide 1-2 yang kadung ditulis bikin extract
+berikutnya melewati postnya, jadi kehilangannya permanen. Yang gagal diambil lagi
+lewat tombol **baca ulang** per kartu (`--force`).
+
 `llmPost()`/`llmContent()` satu-satunya titik sentuh HTTP; ganti provider = ubah
 env, bukan kode. Schema (`extractionSchema()`) dan prompt tidak ikut berubah.
 
@@ -409,10 +457,10 @@ crawl".
 ```bash
 php artisan serve                  # http://localhost:8000
 php artisan queue:work             # SEMUA antrian sekaligus, paralel (Ctrl+C berhenti)
-php artisan test                   # 112 test: import+dedup+ambang, filter publik, regulasi, halaman akun, post manual, login
+php artisan test                   # 131 test: import+dedup+ambang, filter publik, regulasi, halaman akun, post manual, login SSO, peran, penangguhan
 php artisan packages:import        # storage/extracted/*.json -> database
 php artisan migrate:fresh --seed
-npm run build                      # WAJIB: CSS-nya lewat Vite, bukan CDN lagi
+php artisan view:clear && npm run build   # WAJIB: CSS-nya lewat Vite, bukan CDN lagi
 ```
 
 **Tampilannya pakai token shadcn/ui, bukan React.** `resources/css/app.css` memuat
@@ -425,6 +473,26 @@ tidak dipakai; komponen baru = tambah satu file Blade dengan kelas dari
 ui.shadcn.com. Ganti tema = ganti nilai di `:root`, bukan kelas per elemen.
 CDN `cdn.tailwindcss.com` dibuang: token itu tidak terbaca dari CDN, jadi
 tanpa `npm run build` halamannya tampil tanpa gaya.
+
+**`view:clear` dulu sebelum build.** `resources/css/app.css` memuat
+`@source '../../storage/framework/views/*.php'` — itu perlu (kelas yang cuma muncul
+sesudah Blade meng-compile komponen), tapi cache view yang basi ikut dipindai. Terukur
+2026-08-02: sesudah `php artisan test` (yang meng-compile view error + paginator bawaan)
+bundelnya 56,8 KB; dengan cache bersih 39,6 KB untuk halaman yang sama.
+
+**Yang dipakai lebih dari satu halaman jadi partial, bukan disalin.** Sudah pernah
+menyimpang: kotak `session('status')` punya tiga warna berbeda, dan blok JS centang →
+bar aksi ada dua salinan yang cuma beda kata "akun"/"post". Sekarang:
+`partials/flash` (status + galat validasi, lewat `x-ui.alert`),
+`partials/post-status` (badge status satu post: ditolak/menunggu admin/N paket/dibaca AI
+— kolom status `/posts` dan daftar kiriman `/suggestions`),
+`partials/bulk-select` (`$satuan`, `$catatan`), dan `partials/status-patch` (select
+status → PATCH tanpa reload, dipakai kartu `/` dan kolom status `/posts`).
+
+`bulk-select` dibungkus IIFE dan mendelegasikan ke `document`: halaman akun punya
+`<script>` lain di file yang sama (`const pilih` kembar = SyntaxError yang mematikan
+dua-duanya) **dan** tabel kedua untuk usulan yang menunggu, jadi
+`querySelector('table')` belum tentu tabel yang punya checkbox.
 
 Komponen void (`x-ui.input`) **wajib ditutup `/>`**. Tanpa itu Blade menganggapnya
 tag yang dibuka, menelan sisa halaman jadi slotnya, dan tumbang sebagai
@@ -591,7 +659,7 @@ privat yang sama dengan tombol per barisnya (`bacaUlang()`, `blokir()`) — tida
 kedua yang bisa menyimpang. Post yang rawnya sudah dibuang dilewat diam-diam saat
 `extract` dan dihitung di pesannya.
 
-**Post yang tidak terjangkau fetch dimasukkan tangan lewat `/posts/create`.**
+**Post yang tidak terjangkau fetch dimasukkan tangan lewat `/suggestions`.**
 `business_discovery` mengembalikan media urut **timestamp turun**, bukan urutan grid
 instagram.com — pinned post **tidak** diangkat ke atas. Terukur di `mahyaatourtravel`
 (841 post): `--limit=9` memberi 9 post beruntun 26–31 Juli, sementara flyer yang di-pin
@@ -613,14 +681,31 @@ non-numerik = kartunya tampil tanpa gambar.
 Yang ditulis cuma `storage/raw/{user}/{media}/` persis sebentuk `savePost()` di
 `probe.php`; sesudah itu **tidak ada jalur khusus**. Gerbang vision tetap menilai
 (kiriman manusia bukan vonis "ini paket"), `belumLengkap()` tetap berlaku, dan hasilnya
-tetap `draft`/`review` — tidak ada yang bisa langsung publish lewat sini. Akun yang
-belum terdaftar dibuat sekalian sebagai `approved`, sama seperti textarea di `/accounts`.
+tetap `draft`/`review` — tidak ada yang bisa langsung publish lewat sini.
 
-Kiriman ulang **menimpa**: baris `excluded_posts` dilepas (post yang divonis mesin
-`bukan_paket` memang boleh masuk lewat sini), lalu raw + hasil ekstraksi + baris paket
-se-`media_id` dibuang lewat `hapusJejak()` — method yang sama dengan tombol blokir,
-bedanya cuma arah `excluded_posts`-nya. Tanpa itu `importOne()` melihat barisnya sudah
-ada dan kiriman kedua diam-diam tidak mengubah apa pun.
+**Semua kiriman jadi usulan, termasuk kiriman admin.** Dulu admin punya jalur cepat di
+formulir yang sama: akun langsung `approved`, `ExtractPost` langsung dilempar, kiriman
+ulang menimpa. Itu tiga cabang `if ($admin)` di satu method untuk satu markup — tiga
+kesempatan supaya dua peran diam-diam berperilaku beda atas formulir yang sama, dan
+`store()` yang bercabang di tengah penulisan file itu persis tempat bug yang cuma
+kelihatan untuk satu peran. Sekarang satu jalur: tulis raw, tandai `_suggested_by`,
+selesai. Akunnya juga `pending`.
+
+Approval-nya satu tombol di `/posts` tab **usulan** (dan `/accounts` untuk akunnya).
+Untuk admin itu satu klik tambahan, dan itu harga yang murah untuk satu perilaku.
+Yang mau akun langsung jalan pakai textarea di `/accounts` — endpoint lain, memang
+punya admin.
+
+**Kiriman ulang ditolak, tidak menimpa.** Menimpa berarti membuang raw + hasil
+ekstraksi + baris paket se-`media_id` — itu tombol hapus paket yang sudah di-review,
+cuma lewat pintu lain, dan pintu ini terbuka untuk semua yang bisa login. Post yang
+sudah ada dibetulkan dari `/posts` (baca ulang / blokir / hapus blokir): di situ yang
+menekan sudah melihat barisnya dan aksinya bernama sesuai akibatnya.
+
+Konsekuensinya `hapusJejak()` tidak lagi dipanggil dari `store()` (cuma dari
+`blokir()`), dan parameter `overwrite` yang dulu dikirim chrome extension jadi tidak
+berguna — dibiarkan inert di extension-nya, aturannya sekarang berlaku tanpa perlu
+diminta.
 
 **Tanggal posting wajib diisi dan jangan dikira-kira.** Itu jangkar tahun buat penyusun;
 jangkar yang salah menggeser paket 2027 jadi 2026 dan lolos ambang keberangkatan. Upload
@@ -628,9 +713,25 @@ png/webp di-encode ulang jadi `{n}.jpg` (seluruh pipeline menamai slide begitu) 
 **diratakan ke putih** dulu — `imagejpeg()` membuang kanal alpha, dan flyer transparan
 keluar berlatar hitam sehingga tulisannya tidak terbaca vision.
 
-Halamannya ada di grup `auth`, jadi **belum** jalur contributor luar: tabel `users` tidak
-punya kolom `role`, dan login berarti dapat `/accounts` lengkap dengan bulk hapus akun
-dan `DELETE /pipeline/queue`. Untuk sekarang operator yang memasukkan kirimannya.
+**Asal post ada di `post.json`, bukan di kolom.** `_manual: true` menandai kiriman
+tangan, `_created_by` emailnya — **jejak permanen**, beda dengan `_suggested_by` yang
+cuma penanda "belum di-approve" dan dibuang `bacaUlang()`. Tanpa `_created_by`, kiriman
+manual tidak bisa dibedakan dari hasil scrap kecuali dari panjang `media_id` (19 digit
+hasil decode shortcode vs 17 digit dari Graph), dan itu bukan aturan yang boleh
+diandalkan. `/posts` menampilkannya di kolom tanggal: `scrap` atau emailnya. Post manual
+lama yang cuma punya `_manual` tampil `manual`.
+
+**Daftar "kiriman saya" disaring dengan `_created_by`, bukan `_suggested_by`.** Yang
+kedua dibuang begitu admin menyetujui — kalau itu yang dipakai, kiriman menghilang dari
+daftar pengirimnya sendiri justru pada saat statusnya mulai menarik ("sudah disetujui?
+jadi paket? ditolak kenapa?"). Statusnya dirender `partials/post-status`, partial yang
+sama dengan kolom status `/posts`: satu definisi untuk "ditolak (alasan) / menunggu
+admin / N paket / dibaca AI". Yang **tidak** ikut ke partial itu select status paket —
+itu aksi admin (`PATCH /packages/{id}/status`), bukan keterangan.
+
+Halamannya di grup `auth` (bukan `can:admin`), dan judulnya "Usulan saya" untuk kedua
+peran: satu halaman, satu perilaku, satu markup. Kiriman peran `user` dan kiriman admin
+sama-sama menunggu approval — lihat "Usulan tidak menjalankan apa pun" di bawah.
 
 **Balasan vision yang tidak terbaca bukan vonis.** `jsonOf()` balik `[]` diam-diam
 kalau JSON-nya rusak/terpotong, dan `visionVerdict([])` membacanya jadi
@@ -799,21 +900,76 @@ tiap 5 menit sampai `retryUntil` 2 jam habis. Username salah / token mati / resp
 ditolak → `fail()` sekali, masuk `failed_jobs`, **tidak** diulang sendiri; jalankan
 `php artisan queue:retry all` atau tekan `scrap` lagi.
 
-**Gerbangnya login, bukan `app()->isLocal()`.** Dulu semua alat kerja dikunci
+**Gerbangnya login + peran, bukan `app()->isLocal()`.** Dulu semua alat kerja dikunci
 `abort_unless(app()->isLocal(), 404)` per-method. Itu cukup selama portalnya cuma
 jalan di laptop, tapi begitu di-deploy `/accounts` jadi 404 buat pemiliknya sendiri —
 env sebagai kunci berarti pilihannya cuma "mati" atau "terbuka buat semua orang".
 
-Sekarang satu grup `Route::middleware('auth')` di `routes/web.php` menampung semua
-alat kerja: `/accounts` + aksinya, `/pipeline/*`, `/avatar/*`, dan keempat aksi per
-kartu (`feedback`, `destroy`, `reextract`, `refetch`). Kuncinya di route, bukan di
-dalam controller, supaya method baru di controller yang sudah ada ikut terkunci
-tanpa perlu ingat menambahkan `abort_unless`. Yang publik tinggal tiga: `/`,
-`/packages/{id}` (published saja), dan `/flyers/{media}/{i}.jpg` (published saja).
+Sekarang **tiga lapis** di `routes/web.php`: publik, `auth`, lalu `auth` + `can:admin`.
 
-Pratinjau di `/` (paket non-published + tiga tombol aksi per kartu) menyala kalau
-`$request->user() !== null`; `?all=0` mematikannya buat melihat persis seperti
-pengunjung. Tamu tidak pernah dapat tombolnya — yang dirender pun tidak.
+- publik: `/`, `/packages/{id}` (published saja), `/flyers/{media}/{i}.jpg` (published saja).
+- `auth`: `/suggestions` + `POST /accounts` + `POST /posts` + `/posts/{media}/{i}.jpg` —
+  usulan, tidak menjalankan apa pun.
+- `auth` + `can:admin`: sisanya. `/accounts` + aksinya, `/posts` + aksinya, `/pipeline/*`,
+  `/avatar/*`, `/users` + `PATCH /users/{user}`, dan kelima aksi per kartu (`feedback`,
+  `destroy`, `status`, `reextract`, `refetch`).
+
+Kuncinya di route, bukan di dalam controller, supaya method baru di controller yang
+sudah ada ikut terkunci tanpa perlu ingat menambahkan `abort_unless`. Izinnya cuma satu
+gate — `Gate::define('admin')` di `AppServiceProvider`, dipakai juga `@can('admin')` di
+`layout.blade.php` untuk memilih menunya. Menu bukan kunci: yang menolak tetap route.
+
+**Dua peran, kolom `users.role`: `admin` dan `user`.** Defaultnya `user` — dan sejak
+pendaftaran terbuka lewat Google, itu bukan cuma jaring pengaman: **siapa pun yang masuk
+lewat SSO selalu lahir sebagai `user`**. Tidak ada peran ketiga dan tidak ada tabel izin.
+
+**Naik jadi `admin` cuma lewat SQLite/tinker — sengaja tidak ada tombolnya.**
+`/users` cuma bisa menangguhkan. Alasannya pendaftarannya terbuka: halaman itu akan
+panjang dan penuh nama yang tidak dikenal, dan satu klik salah di baris yang salah
+berarti menyerahkan kuota Graph + tagihan model ke orang asing. Menaikkan seseorang
+layak dibayar dengan membuka terminal:
+`User::where('email',…)->update(['role' => 'admin'])`.
+
+Menghapus baris pengguna juga tidak disediakan: orangnya tinggal login lagi lewat Google
+dan barisnya lahir kembali. Yang benar-benar menahan itu `suspended_at`.
+
+Pratinjau di `/` (paket non-published + tombol aksi per kartu) menyala untuk **admin**;
+`?all=0` mematikannya buat melihat persis seperti pengunjung, saklarnya di menu.
+Peran `user` melihat portalnya persis seperti tamu — `show()` dan `FlyerThumbController`
+ikut menyaring `isAdmin()`, jadi tidak ada jalur detail yang membocorkan paket yang
+belum lolos review.
+
+**Usulan tidak menjalankan apa pun — untuk semua peran.** `/suggestions` itu satu
+halaman, satu form (post), plus daftar kiriman sendiri + statusnya. Judulnya "Usulan
+saya" dan isinya sama persis untuk `user` maupun admin; tidak ada satu pun cabang
+`if ($admin)` yang tersisa, di controller maupun di markup. Bedanya cuma siapa yang
+boleh menekan tombol approval-nya, dan itu ada di halaman lain.
+
+Textarea "usul akun" **dibuang dari halaman ini**: form post sudah membuat akunnya
+sekalian (`firstOrCreate` di `store()`), jadi dua kotak untuk satu maksud. Endpoint
+`POST /accounts` tetap ada — itu yang dipakai textarea di `/accounts`, dan itu jalur
+admin yang langsung `approved`. Konsekuensinya peran `user` tidak bisa mengusulkan akun
+tanpa sekalian mengirim satu postnya; itu memang saringan yang dimau — usul akun kosong
+tidak bisa dinilai admin.
+
+- **akun**: `SourceAccount::firstOrCreate($user, ['status' => 'pending', 'suggested_by' => <email>])`.
+  Yang menahannya `status`, bukan kolom `suggested_by` — semua jalur crawl menyaring
+  `approved`. Approval di `/accounts`: tabel usulan di atas daftar kerja, tombolnya
+  memanggil endpoint bulk yang sama (`action=approve`).
+- **post**: raw ditulis seperti biasa, tapi `post.json` dapat `_suggested_by` dan
+  `ExtractPost` **tidak** di-dispatch. `ExtractPending` menyaring kuncinya dengan
+  `str_contains`; pemindai yang lain (`probe.php extract` tanpa `--only`) melewatinya
+  juga. Approval = tombol **setujui & baca** di `/posts` (tab **usulan**), yang jalurnya
+  persis `bacaUlang()`: penandanya dibuang lalu `ExtractPost` dilempar. Menolak =
+  tombol blokir yang sudah ada.
+
+Usulan **tidak boleh menimpa** post yang sudah ada (`store()` menolak kalau `akun()`
+menemukannya). Tanpa itu kiriman ulang dari peran `user` = tombol hapus paket yang sudah
+di-review, cuma lewat pintu lain — `store()` memang membuang raw + hasil ekstraksi +
+baris paket se-`media_id` supaya kiriman admin bisa menimpa.
+
+Lolos approval **tidak** berarti jadi paket: gerbang vision tetap menilai dan
+`belumLengkap()` tetap berlaku. Tidak ada yang bisa publish lewat sini.
 
 **URI, nama route, dan query param semuanya bahasa Inggris; label UI tetap
 Indonesia.** Batasnya jelas: yang masuk address bar, bookmark, log akses, dan
@@ -822,17 +978,64 @@ Laravel. Teks yang dibaca operator (label kolom, pesan `with('status')`, tooltip
 komentar) tetap Indonesia; itu bahasa produknya. Jangan campur: `?sort=paket` yang
 menghasilkan label "paket" bikin kelihatan seolah nilainya berasal dari data.
 
-Auth-nya persis konvensi Breeze walau starter kit-nya tidak dipasang: `/login` +
-`/logout`, `Auth\AuthenticatedSessionController` dengan `create`/`store`/`destroy`,
-`resources/views/auth/login.blade.php`, field `remember`. Nama route `login`
+Auth-nya masih di kerangka Breeze walau starter kit-nya tidak dipasang: `/login` +
+`/logout`, `Auth\AuthenticatedSessionController` dengan `create`/`store`/`destroy`
+(+ `callback`), `resources/views/auth/login.blade.php`. Nama route `login`
 **wajib** — itu yang dituju middleware `auth` saat menolak tamu.
 
 Sisanya jamak + kata kerja Inggris: `/accounts`, `/accounts/crawl`, `/accounts/bulk`,
-`/posts` + `/accounts/{account}/posts` (`?filter=packages|rejected|pending`),
-`/posts/bulk`, `/posts/create` + `POST /posts`, `/posts/{media}/extract`, `/packages/{id}`,
-`/pipeline/queue/{queue?}`, `/pipeline/queue/retry/{queue?}`, `/flyers/{media}/{i}.jpg`.
+`/posts` + `/accounts/{account}/posts` (`?filter=packages|rejected|pending|suggestions`),
+`/posts/bulk`, `/suggestions` + `POST /posts`, `/posts/{media}/extract`, `/packages/{id}`,
+`/pipeline/queue/{queue?}`, `/pipeline/queue/retry/{queue?}`, `/flyers/{media}/{i}.jpg`,
+`/users` + `PATCH /users/{user}`, `/login/callback`, `/extension.zip`.
 Param: `?all=` (pratinjau), facet `?account=`, `?sort=` + `?dir=`, `new`/`failed`/`hours`
-(scrap kelompok), `force` (scrap paksa), `unblock`, `action` (bulk).
+(scrap kelompok), `force` (scrap paksa), `unblock`, `action` (bulk),
+`suspended` (penangguhan pengguna).
+
+## Chrome extension
+
+Folder `extension/` (MV3, tanpa build step). Isinya otomatisasi dari apa yang sudah
+dikerjakan tangan di `/suggestions`: baca permalink + username + caption + semua slide
+carousel dari halaman post yang **sedang dibuka operator**, lalu kirim. Nol request ke
+Graph, nol private API — kalau ini terhitung melanggar "jangan scraping unofficial",
+yang dibuang extension-nya, bukan aturannya.
+
+Unduhnya dari menu burger (`GET /extension.zip`, `PostController::extension()`), dirakit
+dari folder itu saat diminta — tidak ada zip yang bisa basi sesudah satu file diedit.
+Pasangnya Load unpacked di `chrome://extensions`; `.crx` yang di-double-click ditolak
+Chrome sejak versi 33 dan tidak ada flag yang membukanya, jadi jalur "sekali klik" cuma
+Chrome Web Store — teks submitnya di `extension/STORE.md`, zip yang sama itu paketnya.
+
+**Alamat portalnya diatur di halaman options, tidak boleh hardcode.** Portalnya dipasang
+sendiri-sendiri, jadi satu alamat tetap cuma benar buat satu orang — dan extension yang
+dibagikan lewat Web Store dengan `localhost:8000` tertanam tidak bisa dipakai siapa pun.
+Konsekuensinya `fill.js` **tidak** didaftarkan lewat `content_scripts` di manifest
+(pola `matches`-nya baru diketahui sesudah alamatnya diisi) melainkan lewat
+`chrome.scripting.registerContentScripts` di `onInstalled`/`onStartup` — pendaftaran
+dinamis tidak selalu selamat dari restart browser. Izin hostnya `optional_host_permissions`
+yang diminta saat form options disimpan; `chrome.permissions.request` menolak panggilan
+tanpa gestur klik, jadi tempatnya memang di situ dan bukan di popup.
+
+**Tidak ada endpoint, token, atau kolom baru untuk extension.** Kirimannya lewat tab
+tersembunyi ke `/suggestions` yang mengisi form itu lalu `fetch` POST-nya: cookie sesi,
+token CSRF, `auth`, dan validasi yang sudah ada terpakai apa adanya. Kredensial kedua
+di dalam extension berarti gudang rahasia kedua yang harus dijaga dan dicabut, dan
+`SESSION_SAME_SITE=none` supaya cookie-nya terkirim lintas-origin.
+
+Kirimannya **tidak beda sedikit pun** dari form manual — dulu ada `overwrite=0` supaya
+kiriman otomatis tidak menimpa paket yang sudah di-review, sekarang tidak ada kiriman
+yang menimpa apa pun jadi parameternya inert. Yang tersisa cuma kesepakatan supaya
+kegagalan tidak diam:
+
+- header `X-Requested-With` → `ValidationException` balas 422 JSON, jadi pesan aslinya
+  bisa ditampilkan tanpa mengurai HTML halaman.
+- `role="status"` / `role="alert"` di `x-ui.alert` — pengait "kiriman ini selamat" buat
+  jalur manual (kelas Tailwind-nya berubah tiap ganti tema, `role` tidak).
+- lemparan ke `/login` diperiksa dua kali (URL tab saat dibuka, `res.url` sesudah POST):
+  fetch mengikuti redirect, jadi sesi yang mati terbaca 200 = "berhasil" palsu.
+
+Video dilewat dengan aturan yang sama seperti `probe.php`, tapi saringannya **elemen**
+`<video>` per slide, bukan URL — poster video juga `<img>` dari `scontent`.
 
 **Kunci JSON `/pipeline/status` sengaja TIDAK ikut** (`post_diunduh`, `hasil_ekstraksi`,
 `antri_ig`, `alasan`, `sekarang`, `jalan`). Itu payload internal buat satu panel di
@@ -840,17 +1043,64 @@ Param: `?all=` (pratinjau), facet `?account=`, `?sort=` + `?dir=`, `new`/`failed
 ditulis panjang di dokumen ini — menerjemahkannya memutus rujukan itu tanpa ada yang
 membaca hasilnya.
 
-Tidak ada halaman daftar dan tidak ada reset lewat email (`MAIL_MAILER=log`, tidak
-ada email yang benar-benar keluar). Akun dibuat dari CLI:
-`php artisan user:create <email>` — email yang sudah ada sandinya diganti, jadi itu
-sekaligus jalur "lupa sandi". Tabel `users` cuma email + password; tidak ada kolom
-`role` karena tidak ada peran kedua. Login POST-nya `throttle:5,1`.
-Manajemen datanya langsung ke SQLite (`database/database.sqlite`) atau `artisan tinker`.
+## Login: Google SSO, tidak ada gerbang kedua
+
+**Sandi dibuang seluruhnya — `user:create` ikut dihapus.** Dulu akun dibuat dari CLI,
+dan itu cukup selama operatornya satu orang. Begitu ada peran `user` yang mengusulkan
+post, "bikin akun dari terminal" berarti tiap contributor menunggu seseorang membuka
+laptop. Google yang menanggung verifikasi email + 2FA-nya; yang tersisa di sini cuma
+peran dan penangguhan. Kolom `password` ditinggal nullable supaya baris lama tidak perlu
+dihapus — isinya tidak pernah dibaca lagi.
+
+Tidak ada sandi cadangan dan itu pilihan sadar: gerbang kedua = satu jalur lagi yang
+bisa ditebak, dan justru itu yang paling gampang jebol. Kalau Google-nya mati, tidak ada
+yang masuk.
+
+**Dikerjakan tangan, bukan Socialite.** Authorization code flow untuk confidential client
+itu tiga request (authorize → token → userinfo) — satu paket lagi untuk itu adalah
+dependency yang tidak dibayar. Yang tidak boleh dilewat cuma dua: `state` sekali pakai
+(`session()->pull`, dibanding `hash_equals` — tanpa itu siapa pun bisa memaksa korban
+login ke akun penyerang) dan `email_verified` (tanpa itu siapa pun bisa mendaftarkan
+alamat orang lain di Workspace-nya sendiri lalu masuk sebagai dia). ID token-nya sengaja
+**tidak** diverifikasi tanda tangannya: kodenya ditukar langsung ke
+`oauth2.googleapis.com` lewat TLS dengan `client_secret` kita, jadi balasannya sudah
+terpercaya. Verifikasi JWT baru perlu kalau tokennya datang lewat browser.
+
+`POST /login` (bukan tautan) yang berangkat ke Google: rutenya sudah ber-CSRF dan
+`throttle:5,1`, jadi tidak ada yang bisa memancing orang lain memulai login dari halaman
+lain. Baliknya `GET /login/callback` — URI itu wajib **persis** sama dengan yang
+didaftarkan di Google Cloud Console (`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
+`GOOGLE_REDIRECT_URI` cuma untuk kasus proxy yang menulis ulang path).
+
+**Barisnya dicari lewat email, bukan `google_id`.** Admin pertama disemai migrasi dan
+belum pernah punya `sub`; cari lewat id-nya saja = dia lahir kembar dan kehilangan
+perannya. `role` tidak pernah ditulis ulang untuk baris yang sudah ada — kalau tidak,
+login berikutnya menurunkan adminnya sendiri.
+
+**`dimitry.adam@gmail.com` admin tunggal**, disemai migrasi
+`2026_08_02_000001_google_sso_and_suspend`. Migrasi yang sama **menurunkan semua baris
+lain jadi `user`**: migrasi peran sebelumnya menaikkan semua baris jadi admin karena
+saat itu satu-satunya jalan bikin user adalah CLI, dan asumsi itu mati begitu siapa pun
+bisa mendaftar.
+
+**Penangguhan digigit tiap request, bukan cuma saat login.** `EnsureNotSuspended`
+dipasang di grup **`web`** (`bootstrap/app.php`), bukan di grup route `auth`: sesi hidup
+120 menit dan `remember` memperpanjangnya berbulan-bulan, jadi cek yang cuma ada di
+callback berarti yang ditangguhkan tetap jalan sampai cookienya mati. Di `web` karena
+ada dua grup `auth` di `routes/web.php` dan halaman publik pun merender menu operator
+kalau yang membuka sedang login.
+
+Tidak ada reset lewat email (`MAIL_MAILER=log`, tidak ada email yang benar-benar keluar)
+— tidak perlu, tidak ada sandi. Manajemen datanya langsung ke SQLite
+(`database/database.sqlite`) atau `artisan tinker`.
 
 **Sebelum deploy:** `APP_DEBUG=false` (halaman error debug memuat isi env — itu
 jalur bocornya `IG_ACCESS_TOKEN` & `AI_API_KEY` yang paling gampang),
 `APP_ENV=production`, `SESSION_SECURE_COOKIE=true` (butuh HTTPS), `FLYER_DISK=s3`
-+ `AWS_*`, lalu `php artisan migrate --force` dan `npm run build`. `.env`,
++ `AWS_*`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` dengan redirect URI produksi
+didaftarkan di Google Cloud Console (`https://<domain>/login/callback`, dicocokkan
+persis — tanpa itu tidak ada yang bisa masuk sama sekali),
+lalu `php artisan migrate --force` dan `npm run build`. `.env`,
 `database/*.sqlite`, `storage/raw|extracted|profiles|flyers` semuanya di-gitignore;
 tidak ada `env()` di luar `config/` (kecuali `probe.php`, yang punya pembacanya
 sendiri dan tidak lewat Laravel), jadi `php artisan config:cache` aman.

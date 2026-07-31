@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Package;
+use App\Support\ExcludedPost;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
@@ -33,6 +34,9 @@ class PackageImportTest extends TestCase
             'hotel_madinah' => ['raw_name' => 'setaraf Al Haram', 'nights' => 3],
             'facilities' => ['visa', 'tiket', 'makan_3x'],
             'confidence' => ['price' => 0.9, 'departure_date' => 0.9, 'hotels' => 0.8, 'ppiu' => 0.9],
+            // Flyer itu syarat masuk: hasil ekstraksi yang normal selalu menyebut
+            // gambar sumbernya, dan yang tidak ditolak `tanpa_gambar`.
+            '_useful_images' => ['0.jpg'],
             '_needs_review' => false,
         ], $override);
     }
@@ -207,7 +211,7 @@ class PackageImportTest extends TestCase
     /** Exclusion yang kadung tercatat saat carouselnya belum habis diekstrak wajib dicabut. */
     public function test_exclusion_dicabut_kalau_slide_lain_ternyata_jadi_paket(): void
     {
-        \App\Support\ExcludedPost::add('carousel3', 'agen_a', 'sebelum_ambang');
+        ExcludedPost::add('carousel3', 'agen_a', 'sebelum_ambang');
 
         $this->import(
             $this->extraction([
@@ -270,6 +274,22 @@ class PackageImportTest extends TestCase
 
         $this->assertSame(0, Package::count(), 'tanpa harga jangan masuk');
         $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'nolharga']);
+    }
+
+    /**
+     * Caption-only (semua gambarnya kena dedup hash, atau jalur `seed`): tidak ada
+     * flyer yang bisa dipajang dan vision tidak pernah melihat apa pun. Postnya
+     * tidak dikecualikan — sama alasannya dengan tanpa harga.
+     */
+    public function test_ekstraksi_tanpa_gambar_tidak_diimpor(): void
+    {
+        $this->import($this->extraction([
+            '_media_id' => 'nogambar',
+            '_useful_images' => [],
+        ]));
+
+        $this->assertSame(0, Package::count(), 'tanpa flyer jangan masuk');
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => 'nogambar']);
     }
 
     /** Harga 0 itu hasil baca yang gagal, bukan paket gratis. */

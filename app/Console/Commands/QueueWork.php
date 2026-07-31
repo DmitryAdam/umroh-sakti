@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\ExtractPending;
 use App\Support\PipelineLog;
 use Illuminate\Contracts\Process\InvokedProcess;
 use Illuminate\Queue\Console\WorkCommand;
@@ -115,6 +116,22 @@ class QueueWork extends WorkCommand
             $jalan[$nama] = $this->spawn($nama, $queue, $berhenti);
         }
 
+        // Detak pemindai. `ExtractPending` sebelumnya cuma dilempar oleh FetchAccount
+        // dan tombol scrap, jadi post yang raw-nya sudah ada tapi ekstraksinya gagal
+        // (semua model timeout = "0 hasil ditulis", tidak ada file ditulis) tidak
+        // punya siapa pun yang memindainya lagi: ia duduk di storage/raw selamanya
+        // sampai kebetulan ada fetch berikutnya. Sama untuk job yang dibuang tombol
+        // "batalkan antrian". Terukur 2026-07-31: 1 post nyangkut 30 menit dengan
+        // antrian kosong, failed_jobs kosong, dan 5 worker nganggur.
+        //
+        // Induknya memang sudah looping, jadi detaknya numpang di sini — tidak perlu
+        // `schedule:work` sebagai proses keempat. Aman diulang: ExtractPending itu
+        // unique-until-processing dan melewati post yang sudah punya hasil.
+        //
+        // ponytail: post yang gagalnya permanen dibayar ulang ke model tiap 15 menit;
+        // kalau itu jadi masalah, hitung percobaannya per media_id sebelum dispatch.
+        $detak = 0;
+
         // JANGAN pakai Process::pool()->wait(): itu `->map->wait()`, jadi induk
         // mengantre di anak pertama (`ig`) yang tidak pernah selesai dan tidak pernah
         // membaca pipe anak lain. Buffer stdout `ai`/`db` penuh (64 KB), anaknya
@@ -128,6 +145,11 @@ class QueueWork extends WorkCommand
         // pernah kejadian, import dari antrian mem-prune pakai aturan yang sudah
         // diperbaiki 20 menit sebelumnya.
         while ($jalan !== []) {
+            if ($berhenti === [] && time() >= $detak) {
+                ExtractPending::dispatch();
+                $detak = time() + 900;
+            }
+
             foreach ($jalan as $nama => $proses) {
                 if ($proses->running()) {
                     continue;

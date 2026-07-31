@@ -37,19 +37,14 @@ class PostController extends Controller
 {
     private const PER_HALAMAN = 60;
 
-    private const FILTERS = ['packages', 'rejected', 'pending'];
+    private const FILTERS = ['packages', 'rejected', 'pending', 'suggestions'];
 
     public function index(Request $request, ?SourceAccount $account = null): View
     {
         $posts = $this->kumpulkan($account?->username);
 
         $f = in_array($request->query('filter'), self::FILTERS, true) ? $request->query('filter') : null;
-        $tampil = (match ($f) {
-            'rejected' => $posts->filter(fn ($p) => $p['alasan'] !== null),
-            'packages' => $posts->filter(fn ($p) => $p['paket']->isNotEmpty()),
-            'pending' => $posts->filter(fn ($p) => $p['alasan'] === null && $p['paket']->isEmpty()),
-            default => $posts,
-        })->values();
+        $tampil = ($f === null ? $posts : $posts->filter(self::saring($f)))->values();
 
         // Halaman "semua post" gampang jadi ribuan baris — masing-masing dengan
         // gambar. Dipotong di sini, bukan di query: himpunannya memang dirakit dari
@@ -70,13 +65,29 @@ class PostController extends Controller
             // ke halaman per-akunnya, dan tanpa peta ini itu satu query per baris.
             'akunId' => $account ? [] : SourceAccount::pluck('id', 'username')->all(),
             'f' => $f,
-            'jumlah' => [
-                null => $posts->count(),
-                'packages' => $posts->filter(fn ($p) => $p['paket']->isNotEmpty())->count(),
-                'rejected' => $posts->filter(fn ($p) => $p['alasan'] !== null)->count(),
-                'pending' => $posts->filter(fn ($p) => $p['alasan'] === null && $p['paket']->isEmpty())->count(),
-            ],
+            // Angka per tab dari saringan yang sama dengan yang menyaring tabelnya —
+            // dua definisi berarti tab yang menyebut 3 lalu menampilkan 5.
+            'jumlah' => [null => $posts->count()] + collect(self::FILTERS)
+                ->mapWithKeys(fn ($key) => [$key => $posts->filter(self::saring($key))->count()])
+                ->all(),
         ]);
+    }
+
+    /**
+     * Satu tab = satu saringan. Dipakai dua kali (isi tabel + angka di tabnya).
+     *
+     * @return \Closure(array<string, mixed>): bool
+     */
+    private static function saring(string $filter): \Closure
+    {
+        return match ($filter) {
+            'rejected' => fn ($p) => $p['alasan'] !== null,
+            'packages' => fn ($p) => $p['paket']->isNotEmpty(),
+            'suggestions' => fn ($p) => $p['usulan'] !== null,
+            // "menunggu" = belum divonis dan belum jadi paket. Usulan yang belum
+            // di-approve tidak dihitung di sini: yang menahannya bukan antrian.
+            default => fn ($p) => $p['alasan'] === null && $p['paket']->isEmpty() && $p['usulan'] === null,
+        };
     }
 
     /**
@@ -145,10 +156,26 @@ class PostController extends Controller
             .'Pastikan `php artisan queue:work` jalan.');
     }
 
-    /** Form tambah post manual. Akun yang sudah ada jadi saran, bukan pilihan tertutup. */
-    public function create(): View
+    /**
+     * Halaman usulan: satu form post, plus daftar kiriman sendiri + statusnya.
+     *
+     * Satu halaman satu perilaku untuk kedua peran — admin tidak punya jalur
+     * "tambah post langsung" lagi (lihat `store()`), jadi tidak ada cabang di sini.
+     *
+     * Daftarnya disaring dengan `oleh` (= `_created_by`), BUKAN `usulan`
+     * (= `_suggested_by`): yang kedua dibuang begitu admin menyetujui, jadi kiriman
+     * yang sudah jalan akan menghilang dari daftar pengirimnya sendiri justru pada
+     * saat statusnya mulai menarik. `_created_by` itu jejak permanen.
+     */
+    public function create(Request $request): View
     {
-        return view('post-create', ['accounts' => SourceAccount::orderBy('username')->pluck('username')]);
+        $email = $request->user()->email;
+
+        return view('suggest', [
+            'accounts' => SourceAccount::orderBy('username')->pluck('username'),
+            'akunSaya' => SourceAccount::where('suggested_by', $email)->orderByDesc('id')->get(),
+            'postSaya' => $this->kumpulkan(null)->where('oleh', $email)->values(),
+        ]);
     }
 
     /**
@@ -166,6 +193,14 @@ class PostController extends Controller
      * membacanya seperti post hasil scrap, gerbang vision tetap menilai, dan paketnya
      * tetap mendarat sebagai `draft`/`review`. Tidak ada yang bisa langsung publish
      * lewat sini.
+     *
+     * **Semua kiriman jadi usulan, termasuk kiriman admin.** Dulu admin punya jalur
+     * cepat (akun langsung `approved`, `ExtractPost` langsung dilempar, kiriman ulang
+     * menimpa) — itu tiga cabang `if ($admin)` di satu method untuk satu formulir,
+     * dan tiga kesempatan supaya dua peran diam-diam berperilaku beda atas markup
+     * yang sama. Sekarang satu jalur: tulis raw, tandai `_suggested_by`, selesai.
+     * Approval-nya satu tombol di /posts tab **usulan** — yang untuk admin berarti
+     * satu klik tambahan, dan itu harga yang murah untuk satu perilaku.
      */
     public function store(Request $request): RedirectResponse
     {
@@ -191,16 +226,27 @@ class PostController extends Controller
             throw ValidationException::withMessages(['account' => 'Username tidak terbaca. Isi handle-nya saja, URL profil, atau @handle.']);
         }
 
-        SourceAccount::firstOrCreate(['username' => $user], ['status' => 'approved']);
+        // Usulan tidak pernah menimpa apa pun, siapa pun yang mengirim. Kiriman
+        // ulang yang menimpa berarti membuang raw + hasil ekstraksi + baris paket
+        // se-media_id — itu tombol hapus paket yang sudah di-review, cuma lewat
+        // pintu lain, dan pintu ini terbuka untuk semua yang bisa login.
+        //
+        // Post yang sudah ada dibetulkan dari /posts (baca ulang / blokir / hapus
+        // blokir), bukan dengan mengirim ulang: di situ yang menekan sudah melihat
+        // barisnya dan aksinya bernama sesuai akibatnya.
+        if ($this->akun($media) !== null) {
+            throw ValidationException::withMessages([
+                'permalink' => "Post $media sudah ada di sistem. Kalau datanya salah, minta admin membacanya ulang dari halaman post.",
+            ]);
+        }
 
-        // Kiriman ulang menimpa, bukan menumpuk. Baris `excluded_posts` dilepas dulu
-        // (itu yang bikin extract melewatinya) — post yang divonis mesin `bukan_paket`
-        // memang boleh masuk lewat sini, karena yang mengirim manusia yang sudah
-        // melihat flyernya. Lalu raw + hasil ekstraksi + baris paket lama dibuang:
-        // `importOne()` tidak pernah menimpa baris yang sudah ada, jadi tanpa ini
-        // kiriman kedua diam-diam tidak mengubah apa pun yang tampil.
-        DB::table('excluded_posts')->where('media_id', $media)->delete();
-        $this->hapusJejak($media, $this->akun($media) ?? $user);
+        // Akunnya juga `pending`, termasuk kiriman admin: approval-nya satu klik di
+        // /accounts, dan cabang "kalau admin langsung approved" berarti dua perilaku
+        // untuk satu formulir. Yang mau akun langsung jalan pakai textarea /accounts.
+        SourceAccount::firstOrCreate(['username' => $user], [
+            'status' => 'pending',
+            'suggested_by' => $request->user()->email,
+        ]);
 
         $dir = storage_path("raw/$user/$media");
         File::ensureDirectoryExists($dir);
@@ -232,14 +278,23 @@ class PostController extends Controller
             // Satu-satunya jejak bahwa post ini tidak lewat Graph API. Fetch tidak
             // pernah menimpanya (folder yang sudah ada dilewat), jadi penandanya tetap.
             '_manual' => true,
+            // Siapa yang mengirim. Beda dengan `_suggested_by` yang dibuang saat
+            // di-approve: ini jejak permanen, ditulis untuk admin maupun peran user.
+            '_created_by' => $request->user()->email,
+            // Penanda "usulan, belum di-approve" — ditulis untuk SEMUA peran. Selama
+            // kuncinya ada, tidak satu pun pemindai (ExtractPending, `probe.php
+            // extract`) mengirimkannya ke model. Dibuang saat disetujui di
+            // `bacaUlang()`, dan itu satu-satunya jalan post ini masuk antrian ai.
+            '_suggested_by' => $request->user()->email,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-        ExtractPost::dispatch($media);
-
-        return redirect()->route('posts.create')->with('status', sprintf(
-            'Post %s (@%s, %d gambar) masuk antrian ai. Pastikan `php artisan queue:work` jalan — '
-            .'hasilnya muncul sebagai draft/review, bukan langsung publish.',
-            $media, $user, count($names),
+        // Pesannya sengaja tanpa media_id, nama antrian, dan perintah artisan:
+        // yang mengirim perlu tahu kirimannya masuk dan apa langkah berikutnya,
+        // bukan nama komponen yang mengerjakannya. Jejak teknisnya sudah ada di
+        // /posts dan panel pipeline, buat yang memang mencarinya.
+        return redirect()->route('suggestions')->with('status', sprintf(
+            'Usulan post @%s (%d gambar) tersimpan dan menunggu disetujui.',
+            $user, count($names),
         ));
     }
 
@@ -282,7 +337,10 @@ class PostController extends Controller
      */
     private static function mediaIdOf(string $url): ?string
     {
-        if (! preg_match('~instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)~', trim($url), $m)) {
+        // Segmen username di depan itu opsional: Instagram melayani post yang sama
+        // sebagai /p/{kode}/ maupun /{handle}/p/{kode}/, dan yang kedua itu yang
+        // ter-copy dari beberapa tampilan. Kodenya sama, jadi media_id-nya sama.
+        if (! preg_match('~instagram\.com/(?:[A-Za-z0-9._]+/)?(?:p|reel|tv)/([A-Za-z0-9_-]+)~', trim($url), $m)) {
             return null;
         }
 
@@ -318,6 +376,34 @@ class PostController extends Controller
     }
 
     /**
+     * Chrome extension sebagai zip, dirakit dari folder `extension/` saat diunduh.
+     *
+     * Tidak di-cache dan tidak ada langkah build: foldernya belasan KB, dan zip
+     * basi sesudah satu file diedit itu bug yang baru kelihatan waktu extension-nya
+     * dipakai — jauh dari tempat salahnya.
+     */
+    public function extension(): BinaryFileResponse
+    {
+        $files = File::files(base_path('extension'));
+        abort_if($files === [], 404);
+
+        $zip = storage_path('app/umroh-sakti-extension.zip');
+        File::ensureDirectoryExists(dirname($zip));
+        File::delete($zip);
+
+        $arsip = new \ZipArchive;
+        abort_unless($arsip->open($zip, \ZipArchive::CREATE) === true, 500);
+
+        foreach ($files as $file) {
+            $arsip->addFile($file->getPathname(), $file->getFilename());
+        }
+
+        $arsip->close();
+
+        return response()->download($zip)->deleteFileAfterSend();
+    }
+
+    /**
      * Post + statusnya, dirakit dari tiga sumber: folder raw (post.json + jpg),
      * `excluded_posts` (post yang rawnya sudah dibuang tetap harus kelihatan), dan
      * baris paket. Tanpa `$user` = seluruh akun.
@@ -342,6 +428,11 @@ class PostController extends Controller
                 'caption' => $json['caption'] ?? '',
                 'permalink' => $json['permalink'] ?? null,
                 'timestamp' => $json['timestamp'] ?? null,
+                // Terisi = usulan yang belum di-approve; isinya email pengusulnya.
+                'usulan' => $json['_suggested_by'] ?? null,
+                // Null = hasil scrap. Terisi = dimasukkan tangan; email pengirimnya
+                // kalau ada (post manual lama cuma punya `_manual`).
+                'oleh' => isset($json['_manual']) ? ($json['_created_by'] ?? 'manual') : null,
                 'images' => array_map(
                     fn ($p) => route('posts.raw', [$media, (int) basename($p, '.jpg')]),
                     glob(dirname($path).'/*.jpg') ?: [],
@@ -350,7 +441,7 @@ class PostController extends Controller
         }
         foreach ($ditolak as $media => $reason) {
             $posts[$media] ??= ['media_id' => (string) $media, 'account' => $user, 'caption' => '',
-                'permalink' => null, 'timestamp' => null, 'images' => []];
+                'permalink' => null, 'timestamp' => null, 'images' => [], 'usulan' => null, 'oleh' => null];
         }
 
         return collect($posts)->map(function ($p) use ($ditolak, $paket) {
@@ -385,8 +476,18 @@ class PostController extends Controller
     {
         $user = $this->akun($media);
 
-        if ($user === null || ! is_file(storage_path("raw/$user/$media/post.json"))) {
+        if ($user === null || ! is_file($post = storage_path("raw/$user/$media/post.json"))) {
             return false;
+        }
+
+        // Tombol ini sekaligus "setujui usulan": penandanya dibuang di sini, jadi
+        // pemindai (ExtractPending, `probe.php extract`) ikut mengambilnya lagi
+        // kalau job ini gagal. Approval memang cuma ini — sesudahnya jalurnya sama
+        // persis dengan post hasil scrap, gerbang vision dan semua.
+        $json = json_decode((string) file_get_contents($post), true) ?: [];
+        if (isset($json['_suggested_by'])) {
+            unset($json['_suggested_by']);
+            File::put($post, json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         }
 
         DB::table('excluded_posts')->where('media_id', $media)->delete();
