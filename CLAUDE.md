@@ -595,6 +595,19 @@ scope status), bukan dari hasil yang sudah difilter: kalau ikut menyempit, memil
 satu kota membuang kota lain dari daftar dan pilihannya tidak bisa diganti tanpa
 reset. Select dengan < 2 pilihan tidak dirender (`status` saat publik).
 
+**Tampilan kartu/daftar + jumlah kolom itu preferensi, bukan filter** — tidak ikut
+query string (link yang dibagikan tidak boleh memaksa tata letak orang lain),
+disimpan di `localStorage`. Defaultnya ikut lebar layar: **daftar di bawah 40rem**,
+kartu di atasnya. Di HP gridnya toh cuma satu kolom, jadi satu kartu memakan hampir
+satu layar penuh untuk satu paket. Cuma default — pilihan yang pernah ditekan tetap
+menang di lebar berapa pun.
+
+Lebar minimum track daftar ditulis `minmax(min(24rem, 100%), 1fr)`. `24rem` telanjang
+lebih lebar dari layar HP (343px isi), dan minmax menolak track yang lebih kecil dari
+min-nya — gridnya jadi lebih lebar dari halamannya dan sisi kanan kartunya kepotong.
+Kolom flyernya sendiri turun 8,5rem → 5,5rem di bawah 40rem, kalau tidak teksnya cuma
+kebagian ~13rem dan hotel/maskapai kena `truncate` sebelum kata kedua.
+
 Klik judul kartu membuka **lightbox** `<dialog>` yang mengambil `/packages/{id}` lewat
 fetch; `show()` membalas `partials.detail` (potongan yang sama, tanpa layout) kalau
 `$request->ajax()`. `href`-nya tetap URL asli, jadi klik-tengah/tanpa JS tetap dapat

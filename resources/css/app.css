@@ -107,6 +107,14 @@
     align-items: stretch;
 }
 
+/* Di HP daftar ini yang jadi tampilan default, dan 8.5rem flyer menyisakan ~13rem
+   untuk teksnya — hotel & maskapai kepotong `truncate` sebelum kata keduanya. */
+@media (width < 40rem) {
+    [data-view='list'] article {
+        grid-template-columns: 5.5rem minmax(0, 1fr);
+    }
+}
+
 /* Kartu tanpa flyer (baris lama tanpa flyer_index) tidak boleh menyisakan kolom
    kiri kosong. */
 [data-view='list'] article:not(:has([data-flyer])) {

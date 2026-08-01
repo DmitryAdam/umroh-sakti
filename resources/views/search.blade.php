@@ -310,7 +310,11 @@
 // breakpoint; tampilan daftar mengabaikan pilihan kolom (selalu satu).
 const grid = document.getElementById('grid');
 const kolomCombo = document.querySelector('[data-store=cols]');
-let tampilan = localStorage.getItem('view') ?? 'grid';
+// Default ikut lebar layar, bukan 'grid' untuk semua: di HP gridnya cuma satu
+// kolom, jadi tiap kartu memakan hampir satu layar penuh untuk satu paket dan
+// membandingkan berarti menggulir jauh. Daftar memuat 3-4 paket per layar.
+// Cuma default — pilihan yang pernah ditekan tetap menang, di lebar berapa pun.
+let tampilan = localStorage.getItem('view') ?? (window.matchMedia('(width < 40rem)').matches ? 'list' : 'grid');
 let kolom = localStorage.getItem('cols') ?? '';
 
 function terapkanTampilan() {
@@ -318,8 +322,13 @@ function terapkanTampilan() {
     // Pilihan kolom berlaku di dua tampilan. Auto: kartu ikut kelas breakpoint
     // (kelas dilepas dengan mengosongkan inline style), daftar pakai auto-fill
     // 24rem — baris daftar butuh lebar minimum, bukan 8 kolom seperti kartu.
+    //
+    // `min(24rem, 100%)`, bukan `24rem` telanjang: layar HP cuma 343px isi, jadi
+    // lebar minimum 384px memaksa gridnya lebih lebar dari halamannya dan sisi
+    // kanan kartunya kepotong. minmax menolak track yang lebih kecil dari min-nya,
+    // dan `100%` di situ = lebar kolom yang tersedia.
     grid.style.gridTemplateColumns = kolom ? `repeat(${kolom}, minmax(0, 1fr))`
-        : (tampilan === 'list' ? 'repeat(auto-fill, minmax(24rem, 1fr))' : '');
+        : (tampilan === 'list' ? 'repeat(auto-fill, minmax(min(24rem, 100%), 1fr))' : '');
     document.querySelectorAll('[data-view-set]').forEach((b) =>
         b.setAttribute('aria-pressed', b.dataset.viewSet === tampilan));
 }
