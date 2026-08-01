@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -108,17 +109,23 @@ class PackageSearchController extends Controller
         // argumen NULL, jadi tiap tier dikerek ke sentinel dulu lalu dikembalikan
         // jadi NULL kalau keempatnya kosong — supaya paket tanpa harga jatuh ke
         // bawah, bukan jadi "termurah".
-        $termurah = 'nullif(min('.implode(', ', array_map(
+        // min() multi-argumen itu SQLite; MySQL menamainya least() dan membaca
+        // min() sebagai agregat (galat jumlah argumen).
+        $min = DB::connection()->getDriverName() === 'sqlite' ? 'min' : 'least';
+
+        $termurah = "nullif($min(".implode(', ', array_map(
             fn ($column) => "coalesce($column, 1e18)",
             Package::PRICE_COLUMNS,
         )).'), 1e18)';
 
+        // `nulls last` juga cuma ada di SQLite/Postgres. `x is null` sebagai kunci
+        // pertama (false=0 dulu) portabel ke dua-duanya.
         $packages = $query
             ->orderByRaw(match ($sort) {
-                'price' => "$termurah asc nulls last",
-                'price_desc' => "$termurah desc nulls last",
-                'date_desc' => 'departure_date desc nulls last',
-                default => 'departure_date asc nulls last',
+                'price' => "$termurah is null, $termurah asc",
+                'price_desc' => "$termurah is null, $termurah desc",
+                'date_desc' => 'departure_date is null, departure_date desc',
+                default => 'departure_date is null, departure_date asc',
             })
             ->get();
 
