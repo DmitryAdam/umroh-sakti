@@ -488,6 +488,15 @@ class PostController extends Controller
         if (isset($json['_suggested_by'])) {
             unset($json['_suggested_by']);
             File::put($post, json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            // Menyetujui postnya = menyetujui akunnya. `store()` membuat akunnya
+            // `pending` sekalian, dan akun `pending` tidak ikut satu pun putaran
+            // scrap — jadi tanpa ini tiap usulan menyisakan satu baris menggantung
+            // di /accounts yang harus di-approve lagi satu per satu. Dilingkupi
+            // `pending`: `blocked` itu vonis, bukan antrian, dan tombol baca ulang
+            // di post hasil scrap tidak boleh menghidupkannya kembali.
+            SourceAccount::where('username', $user)->where('status', 'pending')
+                ->update(['status' => 'approved']);
         }
 
         DB::table('excluded_posts')->where('media_id', $media)->delete();

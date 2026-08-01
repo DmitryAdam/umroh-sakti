@@ -249,21 +249,54 @@ class PublicSearchTest extends TestCase
         $this->assertSame($urutan('date'), $urutan('; drop table packages'));
     }
 
+    /**
+     * Keberangkatan yang sudah lewat tetap ada (masih ketemu lewat ?from=/?to=),
+     * tapi selalu di dasar daftar — di urutan mana pun, termasuk urut harga.
+     */
+    public function test_keberangkatan_lewat_selalu_di_bawah(): void
+    {
+        $this->package(['departure_city' => 'Lewat', 'departure_date' => now()->subDay()], 10_000_000);
+        $this->package(['departure_city' => 'Nanti', 'departure_date' => now()->addMonth()], 40_000_000);
+        $this->package(['departure_city' => 'Tanpatanggal', 'departure_date' => null], 20_000_000);
+
+        $urutan = fn (string $sort) => array_map(
+            fn ($p) => $p->departure_city,
+            $this->get("/?sort=$sort")->assertOk()->viewData('packages')->all(),
+        );
+
+        // Baris tanpa tanggal bukan "lewat" — kalau kunci pertamanya balik NULL,
+        // justru dia yang naik ke puncak.
+        $this->assertSame(['Nanti', 'Tanpatanggal', 'Lewat'], $urutan('date'));
+        $this->assertSame(['Nanti', 'Tanpatanggal', 'Lewat'], $urutan('date_desc'));
+        $this->assertSame(['Tanpatanggal', 'Nanti', 'Lewat'], $urutan('price'));
+
+        // Hari ini masih dihitung berangkat, bukan lewat.
+        $this->package(['departure_city' => 'Harini', 'departure_date' => now()]);
+        $this->assertSame('Harini', $urutan('date')[0]);
+    }
+
     /** Rentang keberangkatan: batasnya inklusif, dan boleh diisi salah satu saja. */
     public function test_filter_rentang_tanggal_keberangkatan(): void
     {
-        $this->package(['departure_city' => 'Awal', 'departure_date' => '2026-03-01']);
-        $this->package(['departure_city' => 'Tengah', 'departure_date' => '2026-05-10']);
-        $this->package(['departure_city' => 'Akhir', 'departure_date' => '2026-08-20']);
+        // Tanggalnya relatif ke hari ini: keberangkatan yang lewat diurut ke dasar
+        // daftar, jadi tanggal tetap bikin urutan yang diharapkan basi sendiri
+        // begitu tanggalnya terlewati.
+        [$awal, $tengah, $akhir] = [now()->addMonth(), now()->addMonths(3), now()->addMonths(6)];
+
+        $this->package(['departure_city' => 'Awal', 'departure_date' => $awal]);
+        $this->package(['departure_city' => 'Tengah', 'departure_date' => $tengah]);
+        $this->package(['departure_city' => 'Akhir', 'departure_date' => $akhir]);
 
         $kota = fn (string $q) => array_map(
             fn ($p) => $p->departure_city,
             $this->get("/?$q")->assertOk()->viewData('packages')->all(),
         );
 
-        $this->assertSame(['Tengah'], $kota('from=2026-05-10&to=2026-05-10'), 'batasnya inklusif');
-        $this->assertSame(['Tengah', 'Akhir'], $kota('from=2026-04-01'));
-        $this->assertSame(['Awal', 'Tengah'], $kota('to=2026-05-10'));
+        $d = fn ($t) => $t->toDateString();
+
+        $this->assertSame(['Tengah'], $kota("from={$d($tengah)}&to={$d($tengah)}"), 'batasnya inklusif');
+        $this->assertSame(['Tengah', 'Akhir'], $kota('from='.$d($tengah->copy()->subDay())));
+        $this->assertSame(['Awal', 'Tengah'], $kota('to='.$d($tengah)));
         $this->assertSame(['Awal', 'Tengah', 'Akhir'], $kota('from=&to='), 'kolom kosong = tanpa batas');
     }
 

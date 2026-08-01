@@ -550,6 +550,18 @@ Urutan & filter di `/` semuanya query string, satu form GET tanpa JS framework.
 `price_desc`, nilai asing balik ke `date`). Urut harga memakai tier terisi yang
 **termurah**, dan paket tanpa harga sama sekali selalu di bawah — di kedua arah.
 
+**Keberangkatan yang sudah lewat selalu di dasar daftar, di urutan mana pun.** Kunci
+urut pertama sebelum semua yang lain (`departure_date < hari ini`), jadi berlaku juga
+untuk urut harga — tanpa itu paket yang berangkat bulan lalu jadi "termurah" dan
+menyampahi puncak daftar. Barisnya **tidak** dibuang: masih ketemu lewat `?from=`/`?to=`
+dan link permanennya tetap hidup; yang berangkat kemarin cuma turun, tidak hilang.
+`is not null and` di kunci itu perlu — tanpanya baris tanpa tanggal balik NULL dan NULL
+urut paling depan di ASC, persis kebalikan dari yang dimau.
+
+Konsekuensinya test yang menuliskan tanggal tetap ("2026-05-10") basi sendiri begitu
+tanggalnya terlewati: urutan yang diharapkan berubah tanpa ada kode yang berubah.
+Tanggal di test urutan ditulis relatif (`now()->addMonths(3)`).
+
 Filternya: `?from=`/`?to=` (inklusif, boleh salah satu saja), `duration_min`/
 `duration_max`, `min_price`/`max_price` (rupiah, kena ke tier mana saja),
 `hotel` (LIKE ke dua kolom hotel), `q` (LIKE ke pembimbing/hotel/kota/maskapai),
@@ -967,9 +979,17 @@ tidak bisa dinilai admin.
 - **post**: raw ditulis seperti biasa, tapi `post.json` dapat `_suggested_by` dan
   `ExtractPost` **tidak** di-dispatch. `ExtractPending` menyaring kuncinya dengan
   `str_contains`; pemindai yang lain (`probe.php extract` tanpa `--only`) melewatinya
-  juga. Approval = tombol **setujui & baca** di `/posts` (tab **usulan**), yang jalurnya
-  persis `bacaUlang()`: penandanya dibuang lalu `ExtractPost` dilempar. Menolak =
-  tombol blokir yang sudah ada.
+  juga. Approval = tombol **setujui & baca** di `/posts` (tab **usulan**), per baris
+  maupun kelompok (`POST /posts/bulk` dengan `action=extract` — aksinya memang sama,
+  yang beda cuma katanya di tab usulan). Jalurnya persis `bacaUlang()`: penandanya
+  dibuang lalu `ExtractPost` dilempar. Menolak = tombol blokir yang sudah ada.
+
+**Menyetujui postnya sekalian menyetujui akunnya.** `store()` membuat akunnya `pending`,
+dan akun `pending` tidak ikut satu pun putaran scrap — jadi approval post yang tidak
+menyentuh akunnya menyisakan satu baris menggantung di `/accounts` per usulan, yang harus
+di-approve lagi satu-satu untuk sesuatu yang sudah diputuskan. `bacaUlang()` menaikkannya
+saat membuang `_suggested_by`, dilingkupi `status = pending`: `blocked` itu vonis bukan
+antrian, jadi baca ulang post hasil scrap tidak pernah menghidupkannya kembali.
 
 Usulan **tidak boleh menimpa** post yang sudah ada (`store()` menolak kalau `akun()`
 menemukannya). Tanpa itu kiriman ulang dari peran `user` = tombol hapus paket yang sudah

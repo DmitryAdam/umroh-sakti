@@ -120,7 +120,15 @@ class PackageSearchController extends Controller
 
         // `nulls last` juga cuma ada di SQLite/Postgres. `x is null` sebagai kunci
         // pertama (false=0 dulu) portabel ke dua-duanya.
+        //
+        // Keberangkatan yang sudah lewat tidak dibuang — masih ketemu lewat ?from=/?to=
+        // dan link permanennya tetap hidup — tapi selalu di dasar daftar, di urutan
+        // mana pun. Dibuang sama sekali berarti paket yang berangkat kemarin hilang
+        // dari halaman yang jadi satu-satunya cara operator melihatnya.
+        // `is not null and` perlu: tanpa itu baris tanpa tanggal balik NULL dan NULL
+        // urut paling depan di ASC — persis kebalikan dari yang dimau.
         $packages = $query
+            ->orderByRaw('departure_date is not null and departure_date < ?', [now()->toDateString()])
             ->orderByRaw(match ($sort) {
                 'price' => "$termurah is null, $termurah asc",
                 'price_desc' => "$termurah is null, $termurah desc",

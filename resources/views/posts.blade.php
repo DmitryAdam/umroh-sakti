@@ -65,9 +65,13 @@
     <span><strong data-terpilih>0</strong> post dipilih</span>
     <button type="button" data-batal-pilih class="text-stone-500 underline">batal pilih</button>
     <div class="ml-auto flex flex-wrap items-center gap-2">
-        <button form="bulk" name="action" value="extract" data-confirm="Baca ulang"
-                data-catatan="Blok penolakan dilepas, paket lamanya dibikin ulang, dan modelnya dibayar lagi."
-                class="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-100">Baca ulang AI</button>
+        {{-- Aksinya satu: `extract` = bacaUlang(), dan itu memang yang menyetujui
+             usulan (penanda `_suggested_by` dibuang + akunnya ikut approved). Yang
+             beda cuma katanya, supaya di tab usulan tombolnya bernama sesuai
+             akibatnya — sama dengan tombol per barisnya. --}}
+        <button form="bulk" name="action" value="extract" data-confirm="{{ $f === 'suggestions' ? 'Setujui & baca' : 'Baca ulang' }}"
+                data-catatan="{{ $f === 'suggestions' ? 'Akun pengusulnya ikut disetujui dan postnya dibaca AI.' : 'Blok penolakan dilepas, paket lamanya dibikin ulang, dan modelnya dibayar lagi.' }}"
+                class="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-100">{{ $f === 'suggestions' ? 'Setujui & baca' : 'Baca ulang AI' }}</button>
         {{-- Vonis manusia: baru di sini file rawnya dibuang. Import sengaja
              menahannya untuk `bukan_paket` — itu vonis mesin dan paling sering salah. --}}
         <button form="bulk" name="action" value="block" data-confirm="Blokir"

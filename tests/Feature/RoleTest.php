@@ -134,5 +134,23 @@ class RoleTest extends TestCase
         // Penandanya dibuang, jadi pemindai berikutnya ikut mengambilnya kalau job ini gagal.
         $this->assertArrayNotHasKey('_suggested_by', $this->rawJson());
         Queue::assertPushed(ExtractPost::class);
+
+        // Akunnya ikut disetujui: `pending` tidak ikut satu pun putaran scrap, jadi
+        // approval post yang tidak menyentuhnya menyisakan baris menggantung di /accounts.
+        $this->assertSame('approved', SourceAccount::firstWhere('username', self::AKUN)->status);
+    }
+
+    public function test_baca_ulang_post_scrap_tidak_menghidupkan_akun_blocked(): void
+    {
+        $this->actingAsPengusul();
+        $this->kirimPost();
+
+        // Usulannya sudah divonis blokir sebelum sempat disetujui.
+        SourceAccount::where('username', self::AKUN)->update(['status' => 'blocked']);
+
+        $this->actingAsOperator();
+        $this->post(route('posts.reextract', self::MEDIA))->assertRedirect();
+
+        $this->assertSame('blocked', SourceAccount::firstWhere('username', self::AKUN)->status);
     }
 }
