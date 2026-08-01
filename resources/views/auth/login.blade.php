@@ -5,8 +5,7 @@
 <x-ui.card class="mx-auto mt-10 w-full max-w-sm p-6">
     <h1 class="text-lg font-semibold tracking-tight">Masuk</h1>
     <p class="mt-1 text-sm text-muted-foreground">
-        Pencarian paket tetap terbuka tanpa login. Masuk cuma perlu kalau mau
-        mengusulkan post atau mengelola data.
+       Assalamualaikum,
     </p>
 
     {{-- Penolakan login (state kedaluwarsa, email belum terverifikasi, akun
@@ -31,9 +30,6 @@
         </x-ui.button>
     </form>
 
-    <p class="mt-4 text-xs text-muted-foreground">
-        Tidak ada pendaftaran terpisah — masuk pertama kali sekaligus membuat akunnya
-        sebagai pengusul. Akses alat kerja diberikan admin.
-    </p>
+   
 </x-ui.card>
 @endsection
