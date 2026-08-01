@@ -12,7 +12,8 @@ use Illuminate\Support\Facades\DB;
  * extract tidak membayar model untuk post yang sudah dibuang.
  *
  * Alasan: `bukan_paket` (gerbang vision / saringan struktural), `haji` (haji khusus,
- * bukan umroh), `sebelum_ambang`
+ * bukan umroh), `bukan_umroh` (wisata halal ke Korea/Jepang/Eropa — bentuknya paket
+ * lengkap, tujuannya bukan tanah suci), `sebelum_ambang`
  * (keberangkatan di bawah config `umroh.min_departure`), `manual` (tombol × di
  * halaman review).
  */

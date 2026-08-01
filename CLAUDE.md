@@ -182,6 +182,36 @@ Konsekuensinya hasil ekstraksi lama tidak otomatis memanen jadwalnya: filenya su
 ada, jadi `extract` melewatinya. Perlu `--force`/`--only` (bayar model lagi) atau
 tombol baca ulang per kartu.
 
+**Wisata halal bukan umroh — ditolak di import** (`bukanUmroh()`, reason `bukan_umroh`).
+Travel umroh juga menjual tur ke Korea, Jepang, China, Hongkong, Uzbekistan, Eropa,
+New Zealand, dan flyernya lolos semua saringan lain karena bentuknya memang paket:
+tanggal, durasi, harga, maskapai. Nama travel **bukan** penandanya — "Ramah Umroh &
+Halal Tour" dan "ABNA TOUR — The Ultimate Hajj & Umrah Experience" itu kop surat yang
+memuat kata umroh dan dipasang di flyer yang menjual Seoul, jadi kata `umroh`/`umrah`
+sendiri tidak dihitung jejak tanah suci.
+
+Dua sinyal, sama bentuknya dengan `isHaji()`: ada tujuan yang tidak pernah jadi rute
+umroh **DAN** nol jejak tanah suci (`makkah`, `madinah`, `nabawi`, `haram`, `thawaf`,
+`raudhah`, …) di teks slide itu. Sinyal kedua yang menahan salah tangkap: transit
+atau extension ke negara mana pun tetap umroh selama tanah sucinya ikut dijual.
+
+Yang **tidak boleh** masuk daftar tujuan: apa pun yang bisa jadi extension umroh —
+Turki, Dubai, Kairo, Aqsa, Jordan, Petra, Andalusia, Taj Mahal. `petra` sempat dicoba
+dan langsung salah tangkap: "PERJALANAN UMRAH ISTIMEWA — AQSHA JORDAN PETRA, UMRAH
+PLUS AQSHA, 15 hari" tidak menyebut Makkah maupun Madinah sekalipun. Kota domestik
+(Bali, Lombok) juga tidak — itu kota keberangkatan, bukan tujuan.
+
+Terukur 2026-08-01 atas 604 baris: kena 9 (Korea, China, Seoul, Hongkong, New
+Zealand, Uzbekistan), kesembilannya tur, nol salah tangkap. Varian yang menghitung
+kata `umroh` sebagai jejak kena 0 — kop suratnya menutupi semuanya; varian yang cuma
+menuntut jejak tanah suci (tanpa daftar tujuan) kena 39, dan ~30 di antaranya umroh
+beneran yang kebetulan tidak mengeja nama kotanya. Daftarnya memang perlu ditambah
+sesekali; yang tidak boleh berubah itu bentuk dua sinyalnya.
+
+`TRANSCRIBE_PROMPT` juga menyuruh vision menolaknya (`other`) — itu lebih murah
+karena penyusun tidak dipanggil, tapi bukan pengganti saringan import: promptnya
+tidak deterministik dan hasil ekstraksi lama tidak ikut berubah.
+
 **Haji khusus bukan umroh — ditolak di import** (`isHaji()`, reason `haji`).
 Penanda travel **bukan** penandanya: "UMROH & HAJI PLUS" dan "UMRAH & HAJI KHUSUS"
 itu kop surat, paketnya umroh beneran — 34 dari 35 baris yang memuat frasa itu

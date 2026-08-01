@@ -82,6 +82,7 @@ class ImportExtractedPackages extends Command
             $alasan = match (true) {
                 ! $this->isPackageOffer($data) => 'bukan_paket',
                 $this->isHaji($data) => 'haji',
+                $this->bukanUmroh($data) => 'bukan_umroh',
                 // Postnya cuma dikecualikan kalau SEMUA keberangkatannya sudah lewat.
                 // Flyer jadwal yang separuh barisnya kedaluwarsa tetap dipakai.
                 array_filter($offers, fn ($o) => ! $this->tooEarly($o)) === [] => 'sebelum_ambang',
@@ -89,7 +90,9 @@ class ImportExtractedPackages extends Command
             };
 
             if ($alasan !== null) {
-                $alasan === 'bukan_paket' ? $bukanPaket++ : $lewatTanggal++;
+                // `haji` & `bukan_umroh` ikut dihitung "bukan penawaran paket": dua-duanya
+                // vonis "ini bukan barang yang dijual portal ini", bukan soal tanggal.
+                $alasan === 'sebelum_ambang' ? $lewatTanggal++ : $bukanPaket++;
                 $tolak[] = [$file, $data, $alasan];
 
                 continue;
@@ -285,6 +288,57 @@ class ImportExtractedPackages extends Command
         )]);
 
         return ($d['duration_days'] ?? 0) >= 18 || $harga >= 100_000_000;
+    }
+
+    /**
+     * Wisata halal ke tujuan yang bukan tanah suci — Korea, Jepang, China, Eropa.
+     * Portal ini agregator umroh; paket begini lolos semua saringan lain karena
+     * bentuknya memang paket: ada tanggal, durasi, harga, maskapai.
+     *
+     * Nama travel BUKAN penanda, sama seperti `isHaji()` — dan di sini lebih tajam
+     * lagi: "Ramah Umroh & Halal Tour" dan "ABNA TOUR — The Ultimate Hajj & Umrah
+     * Experience" itu kop surat yang memuat kata umroh, dipasang di flyer yang
+     * menjual Seoul. Makanya kata `umroh`/`umrah` sendiri TIDAK dihitung jejak
+     * tanah suci; yang dihitung cuma yang tidak pernah nyangkut di nama PT
+     * (makkah/madinah/nabawi/haram/thawaf/…).
+     *
+     * Dua sinyal, sama seperti haji: ada tujuan yang tidak pernah jadi rute umroh,
+     * DAN nol jejak tanah suci di seluruh teks slide itu. Sinyal kedua yang menahan
+     * salah tangkap — umroh plus Turki/Dubai/Aqsa selalu menyebut Makkah atau
+     * Madinah, dan "Japan Airlines"/"China Southern" di flyer umroh juga.
+     * Yang TIDAK boleh masuk daftar tujuan: apa pun yang bisa jadi extension umroh
+     * — Turki, Dubai, Kairo, Aqsa, Jordan, Petra, Andalusia, Taj Mahal. `petra`
+     * sempat dicoba dan langsung salah tangkap: "PERJALANAN UMRAH ISTIMEWA — AQSHA
+     * JORDAN PETRA, UMRAH PLUS AQSHA, 15 hari" tidak menyebut Makkah maupun Madinah
+     * sekalipun, jadi sinyal kedua tidak menahannya. Kota domestik (Bali, Lombok)
+     * juga tidak: itu kota keberangkatan, bukan tujuan.
+     *
+     * Terukur atas 604 baris paket: kena 9 — Korea, China, Seoul, Hongkong, New
+     * Zealand, Uzbekistan — kesembilannya tur, nol salah tangkap. Sinyal kedua
+     * tanpa pengecualian kata `umroh` kena 0: kop suratnya menutupi semuanya.
+     *
+     * Daftarnya memang perlu ditambah sesekali; yang tidak boleh berubah itu
+     * bentuknya — tujuan yang tidak pernah jadi rute umroh, DAN nol jejak tanah suci.
+     */
+    private function bukanUmroh(array $d): bool
+    {
+        $teks = mb_strtolower(implode(' ', array_filter([
+            $d['_flyer_text'] ?? '',
+            $d['facilities_raw'] ?? '',
+        ], 'is_string')));
+
+        $tujuan = '/\b(korea|seoul|busan|jepang|japan|tokyo|osaka|kyoto|hokkaido|shirakawago'
+            .'|china|tiongkok|beijing|shanghai|xian|terracotta|terracota'
+            .'|nami island|everland|namsan|gyeongbok|lotte world'
+            .'|hong ?kong|taiwan|bangkok|pattaya|thailand|vietnam|hanoi|danang'
+            .'|uzbekistan|kazakh\w*|kyrgyz\w*|krygyz\w*|samarkand|bukhara|tashkent'
+            .'|new zealand|auckland|aukland|queenstown|australia|sydney|melbourne'
+            .'|eropa|europe|swiss|paris|london|amsterdam)\b/';
+
+        $tanahSuci = '/(makkah|mekkah|mekah|makkatul|madinah|madinatul|masjidil ?haram|nabawi'
+            ."|haramain|ka'?bah|tanah suci|miqat|thawaf|tawaf|multazam|raudhah)/";
+
+        return preg_match($tujuan, $teks) === 1 && preg_match($tanahSuci, $teks) !== 1;
     }
 
     /**

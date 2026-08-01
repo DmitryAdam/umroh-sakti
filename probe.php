@@ -1580,6 +1580,14 @@ sengaja ketat.
 gambar yang ketiga penandanya benar. Kalau tidak ada satu pun, pilih kategori lain —
 walaupun jelas-jelas flyer paket, walaupun sudah ada nama hotel dan maskapai.
 
+TUJUANNYA WAJIB MAKKAH/MADINAH. Travel umroh juga menjual wisata halal ke Korea,
+Jepang, China, Hongkong, Uzbekistan, Eropa, New Zealand — bentuknya sama persis
+(tanggal, durasi, harga, maskapai) tapi itu bukan umroh dan tidak boleh masuk. Yang
+begitu `other`, walaupun ketiga penandanya benar dan walaupun kop suratnya bertulis
+"Umroh & Halal Tour" atau "The Ultimate Hajj & Umrah Experience" — nama travel bukan
+penanda. Transit atau extension ke negara lain TETAP paket umroh selama tanah sucinya
+ikut dijual: "Umroh plus Turki", "Umroh plus Aqsa", "Umroh plus Dubai" = `package_offer`.
+
 Kategori kalau bukan `package_offer`:
 - `hotel_info`    — mengenalkan/mendaftar hotel, perbandingan jarak ke Haram.
 - `education`     — tips, manasik, doa, dakwah, sejarah.

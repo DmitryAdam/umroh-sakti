@@ -410,6 +410,37 @@ class PackageImportTest extends TestCase
     }
 
     /**
+     * Wisata halal ke Korea/Jepang/Eropa bukan umroh. Bentuknya paket lengkap —
+     * tanggal, durasi, harga, maskapai — jadi tidak ada saringan lain yang menahannya.
+     *
+     * Dua yang gampang salah: kop surat travel memuat kata umroh ("Umroh & Halal
+     * Tour" menjual Seoul), dan extension ke negara lain TETAP umroh selama tanah
+     * sucinya ikut dijual.
+     */
+    public function test_wisata_halal_bukan_umroh_tapi_umroh_plus_negara_lain_tetap_lolos(): void
+    {
+        $this->import(
+            $this->extraction([
+                '_media_id' => 'tour1',
+                '_flyer_text' => "Ramah Umroh & Halal Tour\nTOUR AGUSTUS\n5D SEOUL NAMI ISLAND + EVERLAND\n11.5 JT",
+            ]),
+            $this->extraction([
+                '_media_id' => 'tour2',
+                '_flyer_text' => "ABNA TOUR\nTHE ULTIMATE HAJJ & UMRAH EXPERIENCE\nMuslim Korea\nProgram 6 Hari",
+            ]),
+            $this->extraction([
+                '_media_id' => 'plus1',
+                '_flyer_text' => "UMROH PLUS TURKI CAPPADOCIA\n12 Hari\nHotel Makkah: Fairmont\nHotel Madinah: Anwar",
+            ]),
+        );
+
+        $this->assertSame(['plus1'], Package::pluck('media_id')->all(),
+            'umroh plus negara lain tetap umroh; kop surat berbau umroh bukan penanda');
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'tour1', 'reason' => 'bukan_umroh']);
+        $this->assertDatabaseHas('excluded_posts', ['media_id' => 'tour2', 'reason' => 'bukan_umroh']);
+    }
+
+    /**
      * Flyer haji sering cuma menulis tahun. Cast `date` membaca "2027" sebagai unix
      * timestamp dan barisnya masuk bertanggal 1970 — ikut terurut paling awal dan
      * lolos semua filter rentang.
