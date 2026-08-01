@@ -79,6 +79,22 @@
         background-color: var(--background);
         color: var(--foreground);
     }
+    /* Jaring untuk geser-samping di layar HP. Satu elemen yang melar (tabel
+       `whitespace-nowrap`, URL panjang di caption) bikin SELURUH halaman bisa
+       digeser ke kanan, dan header/footer yang `inset-x-0` cuma selebar viewport
+       — jadi gejalanya "sisi kanannya kepotong" di tiap halaman, bukan cuma di
+       elemen yang salah.
+
+       `clip`, bukan `hidden`: `hidden` memindahkan scrollport dan mematikan
+       `position: sticky` headernya, sedangkan `clip` boleh dipasang satu sumbu
+       saja dan sumbu tegaknya tetap `visible`.
+
+       ponytail: ini menyembunyikan gejalanya, bukan menyembuhkan elemennya —
+       yang melar tetap harus dikurung sendiri (`overflow-x-auto` di tabel,
+       `break-words` di teks bebas), kalau tidak isinya jadi tidak terjangkau. */
+    html {
+        overflow-x: clip;
+    }
 }
 
 /* Tampilan daftar: flyer jadi kolom kiri setinggi kartu, bar aksi + isi menumpuk

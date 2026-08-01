@@ -171,7 +171,11 @@ class ManualPostTest extends TestCase
     /** Zip dirakit saat diunduh — kalau folder `extension/` pindah, ini yang jatuh. */
     public function test_extension_bisa_diunduh(): void
     {
-        $this->get(route('extension'))
+        // Halaman pasangnya benar-benar dirender: view yang tidak pernah di-compile
+        // tidak menangkap komponen void yang lupa ditutup `/>`.
+        $this->get(route('extension'))->assertOk()->assertSee('Load unpacked');
+
+        $this->get(route('extension.download'))
             ->assertOk()
             ->assertDownload('umroh-sakti-extension.zip');
     }

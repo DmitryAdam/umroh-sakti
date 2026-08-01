@@ -113,7 +113,10 @@
             <x-ui.icon name="quote" />Caption postingan
             <x-ui.icon name="chevron" class="ml-auto transition-transform group-open:rotate-180" />
         </summary>
-        <p class="whitespace-pre-line border-t px-3 py-2 text-sm leading-relaxed">{{ $caption }}</p>
+        {{-- break-words: caption IG memuat URL & rentetan hashtag tanpa spasi, dan
+             satu "kata" sepanjang itu melar keluar halaman — di HP itu yang bikin
+             seluruh halaman bisa digeser ke samping dan sisi kanannya kepotong. --}}
+        <p class="whitespace-pre-line break-words border-t px-3 py-2 text-sm leading-relaxed">{{ $caption }}</p>
     </details>
 @endif
 

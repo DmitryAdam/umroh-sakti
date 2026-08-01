@@ -40,6 +40,9 @@
         <p class="border-b border-amber-200 px-3 py-2 text-amber-900">
             <strong>{{ $pending->count() }} usulan akun</strong> menunggu — belum ikut di putaran scrap.
         </p>
+        {{-- Wadah overflow-x sendiri: selnya `whitespace-nowrap`, jadi tabel yang
+             lebih lebar dari layar HP menggeser SELURUH halaman kalau tidak dikurung. --}}
+        <div class="overflow-x-auto">
         <table class="w-full">
             <tbody class="divide-y divide-amber-200">
                 @foreach ($pending as $account)
@@ -64,6 +67,7 @@
                 @endforeach
             </tbody>
         </table>
+        </div>
     </div>
 @endif
 
@@ -307,7 +311,8 @@
         <summary class="cursor-pointer px-3 py-2 text-stone-600">
             Blocklist ({{ $blocked->count() }}) — tidak di-scrap, ditolak kalau dimasukkan lagi
         </summary>
-        <table class="w-full border-t border-stone-200 text-xs">
+        <div class="overflow-x-auto border-t border-stone-200">
+        <table class="w-full text-xs">
             <tbody class="divide-y divide-stone-100">
                 @foreach ($blocked as $account)
                     <tr class="hover:bg-stone-50">
@@ -338,6 +343,7 @@
                 @endforeach
             </tbody>
         </table>
+        </div>
     </details>
 @endif
 

@@ -494,6 +494,24 @@ status → PATCH tanpa reload, dipakai kartu `/` dan kolom status `/posts`).
 dua-duanya) **dan** tabel kedua untuk usulan yang menunggu, jadi
 `querySelector('table')` belum tentu tabel yang punya checkbox.
 
+**Halamannya tidak boleh bisa digeser ke samping di HP.** Satu elemen yang melar
+(tabel `whitespace-nowrap`, URL panjang di caption IG) melebarkan SELURUH halaman, dan
+header + footer yang `inset-x-0` cuma selebar viewport — jadi gejalanya "sisi kanan
+kepotong" di tiap halaman, bukan di elemen yang salah. Dua aturannya: tabel selalu
+dibungkus `overflow-x-auto` sendiri, teks bebas dari luar (caption, nama hotel apa
+adanya) selalu `truncate` atau `break-words`. `html { overflow-x: clip }` di
+`app.css` cuma jaring — `clip`, bukan `hidden`, karena `hidden` memindahkan scrollport
+dan mematikan `position: sticky` headernya.
+
+**Teks yang dibaca pengusul ditulis untuk orang awam, bukan untuk yang paham
+pipeline-nya.** `/suggestions` sempat menerangkan `--limit`, kuota Graph, gerbang
+vision, dan status `draft`/`review` di caption tiap field — semuanya benar dan tidak
+satu pun menjawab "saya harus isi apa". Aturannya: satu kalimat per field, kata kerja
+yang bisa dikerjakan, istilah internal cuma boleh muncul kalau yang mengisi memang
+harus tahu (tanggal posting: perlu, karena itu jangkar tahun dan salah isi menggeser
+paketnya setahun). Halaman kerja admin (`/accounts`, `/posts`) tidak kena aturan ini —
+yang membacanya di situ memang perlu istilahnya.
+
 Komponen void (`x-ui.input`) **wajib ditutup `/>`**. Tanpa itu Blade menganggapnya
 tag yang dibuka, menelan sisa halaman jadi slotnya, dan tumbang sebagai
 `ParseError: expecting endif` di baris terakhir — jauh dari tag yang sebenarnya
@@ -1015,7 +1033,7 @@ Sisanya jamak + kata kerja Inggris: `/accounts`, `/accounts/crawl`, `/accounts/b
 `/posts` + `/accounts/{account}/posts` (`?filter=packages|rejected|pending|suggestions`),
 `/posts/bulk`, `/suggestions` + `POST /posts`, `/posts/{media}/extract`, `/packages/{id}`,
 `/pipeline/queue/{queue?}`, `/pipeline/queue/retry/{queue?}`, `/flyers/{media}/{i}.jpg`,
-`/users` + `PATCH /users/{user}`, `/login/callback`, `/extension.zip`.
+`/users` + `PATCH /users/{user}`, `/login/callback`, `/extension` + `/extension.zip`.
 Param: `?all=` (pratinjau), facet `?account=`, `?sort=` + `?dir=`, `new`/`failed`/`hours`
 (scrap kelompok), `force` (scrap paksa), `unblock`, `action` (bulk),
 `suspended` (penangguhan pengguna).
@@ -1033,6 +1051,14 @@ dari folder itu saat diminta — tidak ada zip yang bisa basi sesudah satu file 
 Pasangnya Load unpacked di `chrome://extensions`; `.crx` yang di-double-click ditolak
 Chrome sejak versi 33 dan tidak ada flag yang membukanya, jadi jalur "sekali klik" cuma
 Chrome Web Store — teks submitnya di `extension/STORE.md`, zip yang sama itu paketnya.
+
+**Menunya menunjuk halaman `/extension`, bukan langsung ke zip-nya** (`Route::view`,
+`extension.blade.php`; zip-nya pindah nama route jadi `extension.download`). Yang
+diunduh itu zip yang harus diekstrak lalu di-Load unpacked dengan Developer mode
+menyala — enam langkah yang tidak bisa ditebak sendiri, dan tautan unduh telanjang
+cuma menyisakan folder yang tidak ada gunanya di Downloads. Halamannya sekalian memuat
+alamat portal ini (`url('/')`) untuk ditempel ke options extension-nya, cara pakai, dan
+tiga kegagalan yang paling sering.
 
 **Alamat portalnya diatur di halaman options, tidak boleh hardcode.** Portalnya dipasang
 sendiri-sendiri, jadi satu alamat tetap cuma benar buat satu orang — dan extension yang

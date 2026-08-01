@@ -65,7 +65,11 @@ Route::middleware('auth')->group(function () {
         ->whereNumber(['media', 'index'])->name('posts.raw');
     // Chrome extension, dirakit dari folder `extension/` saat diunduh. Di `auth`
     // dan bukan `can:admin`: peran `user` juga mengirim post lewat alat ini.
-    Route::get('/extension.zip', [PostController::class, 'extension'])->name('extension');
+    //
+    // Halamannya sendiri, bukan cuma tautan unduh: paketnya zip yang harus di-Load
+    // unpacked, dan langkahnya tidak bisa ditebak oleh yang mengunduh.
+    Route::view('/extension', 'extension')->name('extension');
+    Route::get('/extension.zip', [PostController::class, 'extension'])->name('extension.download');
 });
 
 Route::middleware(['auth', 'can:admin'])->group(function () {

@@ -77,7 +77,7 @@
                             {{-- Chrome extension: kirim post langsung dari halaman
                                  Instagram. Dirakit dari folder `extension/` saat
                                  diunduh, jadi tidak ada zip yang bisa basi. --}}
-                            <a href="{{ route('extension') }}" class="{{ $item }} border-t mt-1 pt-2" download>unduh extension</a>
+                            <a href="{{ route('extension') }}" class="{{ $item }} border-t mt-1 pt-2">extension chrome</a>
 
                             <form method="POST" action="{{ route('logout') }}" class="border-t pt-1 mt-1">
                                 @csrf

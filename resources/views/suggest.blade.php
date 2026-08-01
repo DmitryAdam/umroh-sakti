@@ -9,10 +9,11 @@
 <div class="mx-auto grid max-w-2xl gap-4">
     <div>
         <h1 class="text-lg font-semibold tracking-tight">Usulan saya</h1>
-        <p class="mt-1 text-xs leading-5 text-muted-foreground">
-            Kiriman disimpan dan menunggu disetujui admin. Belum ada yang di-scrap dan belum ada
-            yang dibaca AI sampai itu — jadi tidak ada paket yang lahir dari sini tanpa dilihat
-            orang dulu.
+        <p class="mt-1 text-sm leading-6 text-muted-foreground">
+            Kirim postingan paket umroh yang belum ada di sini. Semua kiriman dicek admin dulu.
+            Kalau sering mengirim, pakai
+            <a href="{{ route('extension') }}" class="underline underline-offset-4">extension Chrome</a>
+            supaya tidak perlu mengetik ulang.
         </p>
     </div>
 
@@ -26,30 +27,28 @@
             @csrf
 
             <div>
-                <h2 class="text-sm font-medium">Post yang tidak terjangkau fetch</h2>
-                <p class="mt-1 text-xs leading-5 text-muted-foreground">
-                    API Instagram mengembalikan post urut tanggal turun — pinned post tidak diangkat ke
-                    atas seperti di tampilan web, jadi flyer lama yang di-pin tidak pernah kena
-                    <code>--limit</code>. Formulir ini memasukkannya tanpa menyentuh kuota Graph.
+                <h2 class="text-sm font-medium">Kirim postingan Instagram</h2>
+                <p class="mt-1 text-sm leading-6 text-muted-foreground">
+                    Buka postingannya di Instagram, lalu isi datanya di bawah. Paling berguna untuk
+                    postingan lama yang tidak terambil otomatis.
                 </p>
             </div>
 
-            <x-ui.field label="Permalink post">
+            <x-ui.field label="Link postingan">
                 <x-ui.input name="permalink" required value="{{ old('permalink') }}"
                             placeholder="https://www.instagram.com/p/DV-tyQIkuw5/" />
-                <span class="text-[11px] text-muted-foreground">
-                    Kode di URL-nya yang jadi id post — kirim ulang URL yang sama akan menimpa,
-                    bukan menambah baris kedua.
+                <span class="text-xs leading-5 text-muted-foreground">
+                    Salin dari tombol bagikan di Instagram. Postingan yang sudah ada di sini akan ditolak.
                 </span>
             </x-ui.field>
 
             {{-- datalist: akun yang sudah ada jadi saran, tapi username baru tetap boleh
                  diketik — yang mengirim sering menemukan travel yang belum kita lacak. --}}
-            <x-ui.field label="Akun sumber">
+            <x-ui.field label="Akun travel">
                 <x-ui.input name="account" required list="accounts" value="{{ old('account') }}"
                             placeholder="mahyaatourtravel" />
-                <span class="text-[11px] text-muted-foreground">
-                    Handle, &#64;-handle, atau URL profil. Kalau belum terdaftar, akunnya dibuat sekalian.
+                <span class="text-xs leading-5 text-muted-foreground">
+                    Nama akunnya, boleh pakai &#64; atau link profil. Akun baru otomatis ditambahkan.
                 </span>
             </x-ui.field>
             <datalist id="accounts">
@@ -58,38 +57,35 @@
                 @endforeach
             </datalist>
 
-            <x-ui.field label="Tanggal posting">
+            <x-ui.field label="Tanggal postingan">
                 <x-ui.input type="date" name="posted_at" required value="{{ old('posted_at') }}" />
-                <span class="text-[11px] text-muted-foreground">
-                    Wajib, dan jangan dikira-kira. Ini jangkar tahun buat penyusun: flyer yang
-                    menulis &ldquo;14 Maret&rdquo; tanpa tahun dibaca sebagai kejadian pertama
-                    setelah tanggal ini.
+                <span class="text-xs leading-5 text-muted-foreground">
+                    Lihat tanggalnya di postingan, jangan dikira-kira. Flyer sering menulis
+                    &ldquo;14 Maret&rdquo; tanpa tahun, dan tanggal ini yang dipakai menebak tahunnya.
                 </span>
             </x-ui.field>
 
-            <x-ui.field label="Flyer">
+            <x-ui.field label="Gambar flyer">
                 <input type="file" name="images[]" required multiple accept="image/jpeg,image/png,image/webp"
-                       class="text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-input
+                       class="w-full max-w-full text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-input
                               file:bg-background file:px-3 file:py-1.5 file:text-xs file:font-medium">
                 <div id="flyer-preview" class="flex flex-wrap gap-2 empty:hidden"></div>
-                <span class="text-[11px] text-muted-foreground">
-                    Untuk carousel, pilih semua slide sekaligus — urutannya jadi nomor slide.
-                    png/webp di-encode ulang jadi jpg.
+                <span class="text-xs leading-5 text-muted-foreground">
+                    Kalau postingannya berisi beberapa gambar, pilih semuanya sekaligus dan urut.
                 </span>
             </x-ui.field>
 
-            <x-ui.field label="Caption (opsional)">
+            <x-ui.field label="Caption (boleh dikosongkan)">
                 <textarea name="caption" rows="6"
                           class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs
                                  outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                          placeholder="Tempel caption aslinya">{{ old('caption') }}</textarea>
-                <span class="text-[11px] text-muted-foreground">
-                    Dipakai membaca yang buram atau disingkat di flyer. Kosongkan kalau tidak ada —
-                    vonisnya tetap dari gambar.
+                          placeholder="Tempel tulisan di bawah postingannya">{{ old('caption') }}</textarea>
+                <span class="text-xs leading-5 text-muted-foreground">
+                    Membantu membaca tulisan yang buram atau disingkat di flyer.
                 </span>
             </x-ui.field>
 
-            <div><x-ui.button>Kirim usulan</x-ui.button></div>
+            <div><x-ui.button class="w-full sm:w-auto">Kirim</x-ui.button></div>
         </form>
     </x-ui.card>
 
@@ -99,17 +95,18 @@
          mulai menarik. Badge statusnya partial yang sama dengan kolom status /posts. --}}
     <x-ui.card class="p-4">
         <h2 class="text-sm font-medium">Kiriman saya</h2>
-        <p class="mb-3 mt-1 text-[11px] leading-4 text-muted-foreground">
-            Status paketnya menyusul sendiri sesudah disetujui: dibaca AI &rarr; jadi baris paket,
-            atau ditolak dengan alasannya. Yang sudah jadi paket baru tampil di pencarian setelah
-            di-<em>publish</em> admin.
+        <p class="mb-3 mt-1 text-sm leading-6 text-muted-foreground">
+            Setelah disetujui admin, postingannya dibaca otomatis lalu jadi paket &mdash; atau
+            ditolak dengan alasannya. Paketnya baru muncul di pencarian setelah dipublikasikan admin.
         </p>
 
         @forelse ($akunSaya->concat($postSaya) as $item)
             {{-- Dua bentuk di satu daftar: usulan akun (model SourceAccount) dan usulan
                  post (array dari kumpulkan()). Dibedakan di sini, bukan dua daftar —
                  yang mengirim tidak memikirkan bedanya, dia cuma mau lihat kirimannya. --}}
-            <div class="flex items-center gap-2 border-t py-2 text-xs first:border-t-0">
+            {{-- flex-wrap: di layar HP satu baris ini (badge + gambar + handle + jumlah)
+                 lebih lebar dari layarnya dan bikin halamannya bisa digeser ke samping. --}}
+            <div class="flex flex-wrap items-center gap-2 border-t py-2 text-xs first:border-t-0">
                 @if ($item instanceof App\Models\SourceAccount)
                     <x-ui.badge :variant="$item->status === 'approved' ? 'default' : 'outline'">{{ $item->status }}</x-ui.badge>
                     <a href="https://www.instagram.com/{{ $item->username }}" target="_blank" rel="noopener"
