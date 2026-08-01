@@ -49,6 +49,19 @@ return [
             'transaction_mode' => 'IMMEDIATE',
         ],
 
+        /*
+         * Sumber `migrate:production`. Pathnya dipatok, bukan env('DB_DATABASE') —
+         * begitu DB_CONNECTION=mysql nilai itu jadi nama database, bukan nama file.
+         * Cuma dibaca oleh command migrasi; hapus kalau file sqlite-nya sudah dibuang.
+         */
+        'sqlite_legacy' => [
+            'driver' => 'sqlite',
+            'database' => database_path('database.sqlite'),
+            'prefix' => '',
+            'foreign_key_constraints' => false,
+            'busy_timeout' => 10000,
+        ],
+
         'mysql' => [
             'driver' => 'mysql',
             'url' => env('DB_URL'),

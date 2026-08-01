@@ -64,11 +64,35 @@ function env(string $key, ?string $default = null): ?string
 }
 
 /**
+ * DSN read-only ke DB-nya Laravel, dirakit dari .env yang sama.
+ *
+ * @return array{0: ?string, 1: ?string, 2: ?string} [dsn, user, password]
+ */
+function dbDsn(): array
+{
+    if (env('DB_CONNECTION', 'sqlite') === 'mysql') {
+        $dsn = sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+            env('DB_HOST', '127.0.0.1'),
+            env('DB_PORT', '3306'),
+            env('DB_DATABASE', 'laravel'),
+        );
+
+        return [$dsn, env('DB_USERNAME'), env('DB_PASSWORD')];
+    }
+
+    $file = env('DB_DATABASE') ?: ROOT.'/database/database.sqlite';
+
+    return [is_file($file) ? "sqlite:$file" : null, null, null];
+}
+
+/**
  * media_id yang sudah dikecualikan: bukan penawaran paket, keberangkatannya sudah
  * lewat, atau dibuang manual di halaman review. Jangan di-scrap lagi.
  *
- * Dibaca langsung dari SQLite-nya Laravel — cuma satu SELECT, tanpa boot framework.
- * Tabel belum ada / DB belum dimigrasi = tidak ada yang dikecualikan.
+ * Dibaca langsung dari DB-nya Laravel — cuma satu SELECT, tanpa boot framework.
+ * Ikut DB_CONNECTION di .env (sqlite atau mysql); tabel belum ada / DB belum
+ * dimigrasi = tidak ada yang dikecualikan.
  *
  * @return array<string, true>
  */
@@ -80,13 +104,13 @@ function excludedIds(): array
     }
 
     $ids = [];
-    $db = ROOT.'/database/database.sqlite';
-    if (! is_file($db)) {
+    [$dsn, $user, $pass] = dbDsn();
+    if ($dsn === null) {
         return $ids;
     }
 
     try {
-        $pdo = new PDO("sqlite:$db", options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $pdo = new PDO($dsn, $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
         $rows = $pdo->query('SELECT media_id FROM excluded_posts')->fetchAll(PDO::FETCH_COLUMN);
         foreach ($rows as $id) {
             $ids[(string) $id] = true;
@@ -1128,6 +1152,10 @@ function cmdExtract(array $argv): void
     // operator sudah melihat flyernya sendiri dan menilai vonis vision salah.
     $noGate = in_array('--no-gate', $argv, true);
     $models = envList(env('EXTRACT_MODEL'), 'ds/deepseek-v4-flash');
+    // Daftar satu model = tidak ada tempat pindah saat routernya menggantung, dan
+    // llmPost cuma mengulang ke pintu yang sama: dua timeout = postnya hilang.
+    count($models) < 2 && out('  ! EXTRACT_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
+    count(envList(env('VISION_MODEL'), 'x')) < 2 && out('  ! VISION_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
 
     @mkdir(EXT_DIR, 0775, true);
 

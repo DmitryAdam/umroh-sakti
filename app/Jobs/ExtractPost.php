@@ -56,6 +56,18 @@ class ExtractPost implements ShouldBeUnique, ShouldQueue
 
     public function handle(): void
     {
+        // Hasilnya sudah ada = tidak ada yang perlu diminta ke model. probe.php
+        // memang melewatinya juga, tapi itu sesudah satu proses PHP di-spawn — dan
+        // job begini menumpuk: lock unique kadaluwarsa selagi job masih antri, jadi
+        // pemindaian berikutnya melempar media yang sama lagi. Guard-nya di sini,
+        // bukan di pemanggil, supaya tombol baca ulang & pemindai kena aturan sama.
+        // Baca ulang menghapus hasil lamanya dulu, jadi tidak ikut terhalang.
+        if (glob(storage_path("extracted/{$this->mediaId}{.json,-*.json}"), GLOB_BRACE) !== []) {
+            PipelineLog::write('ai', "extract {$this->mediaId}: sudah ada hasilnya, dilewat");
+
+            return;
+        }
+
         PipelineLog::write('ai', "== extract {$this->mediaId}");
 
         // stdout probe.php diteruskan apa adanya: request ke model vision, request ke

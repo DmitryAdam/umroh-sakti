@@ -55,10 +55,16 @@ return [
          *
          * Lokal saat dev; di produksi cukup FLYER_DISK=s3 — kunci bucketnya
          * dibaca dari AWS_* yang sama dengan disk 's3' di bawah.
+         *
+         * `root` cuma boleh terisi untuk driver local: di driver s3 nilai itu
+         * dipakai sebagai PREFIX objek, jadi tiap flyer tersimpan dengan path
+         * absolut laptop menempel di key-nya ("/Users/…/storage/flyers/{media}/0.jpg")
+         * dan `allFiles()` balik kosong. Terukur 2026-08-01: 450 objek ter-upload
+         * begitu, harus dihapus dan diunggah ulang.
          */
         'flyers' => [
             'driver' => env('FLYER_DISK', 'local'),
-            'root' => storage_path('flyers'),
+            'root' => env('FLYER_DISK', 'local') === 'local' ? storage_path('flyers') : '',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),
             'region' => env('AWS_DEFAULT_REGION'),

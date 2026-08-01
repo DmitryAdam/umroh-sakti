@@ -6,6 +6,7 @@ use App\Support\PipelineLog;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Pemindai, bukan pengekstrak: melempar satu ExtractPost per post yang belum
@@ -32,8 +33,24 @@ class ExtractPending implements ShouldBeUniqueUntilProcessing, ShouldQueue
     {
         $antri = 0;
 
+        // Yang sudah punya baris di `jobs` tidak dilempar lagi. Lock unique-nya
+        // ExtractPost cuma hidup 600 detik sementara backlog `ai` bisa berjam-jam,
+        // jadi lock itu kadaluwarsa selagi jobnya masih antri dan pemindaian
+        // berikutnya melempar media yang sama — terukur 179 baris untuk 81 media.
+        // Tabel jobs itu kebenarannya, bukan cache_locks (yang juga dihapus tiap
+        // tombol batal ditekan).
+        $sudahAntri = DB::table('jobs')->where('queue', 'ai')->pluck('payload')
+            ->flatMap(fn ($p) => preg_match('/mediaId";s:\d+:"(\d+)"/',
+                json_decode($p, true)['data']['command'] ?? '', $m) ? [$m[1]] : [])
+            ->flip()->all();
+
         foreach (glob(storage_path('raw/*/*/post.json')) ?: [] as $file) {
             $mediaId = basename(dirname($file));
+
+            if (isset($sudahAntri[$mediaId])) {
+                continue;
+            }
+
             // Sudah ada hasilnya = tidak dikirim ulang ke model. ExtractPost juga
             // unique per media_id, jadi dua pemindaian beruntun tidak bikin dobel.
             // Satu post bisa menghasilkan beberapa file (carousel dipecah per gambar),
