@@ -1,6 +1,8 @@
 // Alamat portalnya diatur di halaman options, bukan ditulis di sini: portalnya
 // dipasang sendiri-sendiri, jadi satu alamat tetap cuma benar buat satu orang.
-const portal = async () => (await chrome.storage.sync.get('portal')).portal || 'http://localhost:8000'
+// Yang di bawah cuma nilai awal untuk pasangan baru — begitu options disimpan,
+// chrome.storage yang menang dan nilai ini tidak pernah dibaca lagi.
+const portal = async () => (await chrome.storage.sync.get('portal')).portal || 'https://umrohsakti.my.id'
 
 // fill.js didaftarkan saat jalan, bukan lewat `content_scripts` di manifest:
 // pola matches-nya baru diketahui sesudah alamat portalnya diisi. Dipasang ulang

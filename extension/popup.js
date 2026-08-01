@@ -1,5 +1,5 @@
 const $ = (s) => document.querySelector(s)
-const portal = async () => (await chrome.storage.sync.get('portal')).portal || 'http://localhost:8000'
+const portal = async () => (await chrome.storage.sync.get('portal')).portal || 'https://umrohsakti.my.id'
 
 let panen
 

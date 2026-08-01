@@ -6,7 +6,7 @@ const kabar = (teks, kelas = '') => {
 }
 
 chrome.storage.sync.get('portal').then(({ portal }) => {
-  $('[name=portal]').value = portal || 'http://localhost:8000'
+  $('[name=portal]').value = portal || 'https://umrohsakti.my.id'
 })
 
 $('#simpan').addEventListener('submit', async (e) => {
