@@ -9,6 +9,7 @@ use App\Models\SourceAccount;
 use App\Support\PipelineLog;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
@@ -36,6 +37,9 @@ class AccountController extends Controller
         'rejected' => 'ditolak',
         'last_fetched' => 'terakhir scrap',
     ];
+
+    /** Baris per halaman daftar akun. */
+    private const PER_HALAMAN = 50;
 
     public function index(Request $request): View
     {
@@ -91,8 +95,21 @@ class AccountController extends Controller
             + ($packages[$a->username] ?? 0)
             + ($dikecualikan[$a->username] ?? 0);
 
+        // Dipotong di sini, bukan di query: urutannya sudah dikerjakan di PHP (tiga
+        // kolomnya dihitung dari disk + tabel lain), jadi tidak ada yang bisa di-LIMIT.
+        // Angka & tombol kelompok di view tetap membaca `semua` — "belum pernah
+        // di-scrap" yang ikut nomor halaman tidak bisa dipakai memutuskan apa pun.
+        $halaman = LengthAwarePaginator::resolveCurrentPage();
+
         return view('accounts', [
-            'accounts' => $accounts,
+            'semua' => $accounts,
+            'accounts' => new LengthAwarePaginator(
+                $accounts->forPage($halaman, self::PER_HALAMAN)->values(),
+                $accounts->count(),
+                self::PER_HALAMAN,
+                $halaman,
+                ['path' => $request->url(), 'query' => $request->query()],
+            ),
             'isi' => $isi,
             'blocked' => $blocked->values(),
             'pending' => $pending->values(),

@@ -901,11 +901,28 @@ dan promptnya menuntut satu entri per gambar.
 Panel "catatan & jejak" per kartu (form `review_verdict` + `review_note`) sementara
 dilepas dari UI. Endpoint `POST /packages/{id}/feedback` dan kolomnya masih ada.
 
-Daftar akun sumber di `/accounts` (link dari panel pipeline): masukin username/URL/@handle
+**Panel pipeline halamannya sendiri: `/pipeline`** (`Route::view`, tanpa controller —
+isinya polling ke `/pipeline/status`). Dulu spanduk di atas tabel `/accounts`, dan di
+situ jejaknya wajib dilipat `<details>` supaya daftar akunnya masih kelihatan; dipisah,
+jejaknya dirender terbuka terus (`max-h-[60vh]`, tanpa `<details>`). Menunya jadi dua
+entri (`akun`, `pipeline`), dan `/accounts` menyisakan satu tautan ke sana.
+
+Daftar akun sumber di `/accounts`: masukin username/URL/@handle
 satu per baris (parsernya `SourceAccount::usernameOf()`, dipakai juga oleh
 `packages:crawl`), lihat status + `last_fetched_at` + jumlah post/paket/dikecualikan per akun,
 plus tombol `scrap` per akun dan `Scrap semua` (lewat `packages:crawl --limit=9`). Akun
 yang ditambah dari sini langsung `approved` — operator lokal memang si pemberi approval.
+
+Tabelnya dipotong **50 baris per halaman** (`LengthAwarePaginator` atas Collection —
+urutannya dikerjakan di PHP, jadi tidak ada yang bisa di-`LIMIT`; prev/next dirender
+sendiri, `links()` bawaan memakai kelas Tailwind v3). Angka dan tombol kelompok di
+atasnya dihitung dari `semua`, bukan dari halaman yang tampil: "belum pernah di-scrap"
+yang ikut nomor halaman tidak bisa dipakai memutuskan apa pun.
+
+Usulan akun (`pending`) tetap di luar paginasi — satu blok di atas tabel dengan tombol
+**setujui semua**, id-nya semua dititipkan ke endpoint bulk yang sama (`action=approve`).
+Aman tanpa filter, beda dengan "scrap semua": approval cuma mengubah `status` dan tidak
+mengantrikan fetch apa pun.
 
 **Tidak ada tombol "jalankan pipeline".** Yang mengantrikan job cuma `scrap`/`Scrap
 semua` di `/accounts` dan `packages:crawl` di CLI; `queue:work` yang mengerjakan ketiga
@@ -1337,7 +1354,7 @@ seperti hilang. Sumbernya satu file: `storage/pipeline.jsonl`,
 ditulis `App\Support\PipelineLog`. Isinya stdout `probe.php` apa adanya — request ke
 `graph.facebook.com`, tiap gambar yang di-download beserta nama file & ukurannya,
 request ke model vision & penyusun beserta host + HTTP code + durasi, dan nama file
-hasil ekstraksi. Panel di `/` menampilkannya di `<details> jejak detail`.
+hasil ekstraksi. Halaman `/pipeline` menampilkannya terbuka terus di blok "jejak detail".
 
 Catatan: stdout `queue:work` sendiri block-buffered saat dipipe, jadi baris
 "Processing:" bisa muncul terlambat. Baris detail tidak terpengaruh — job menulis

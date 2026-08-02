@@ -114,6 +114,10 @@ Route::middleware(['auth', 'can:admin'])->group(function () {
     Route::get('/users', [UserController::class, 'index'])->name('users');
     Route::patch('/users/{user}', [UserController::class, 'update'])->name('users.update');
 
+    // Panel pipeline halamannya sendiri, bukan spanduk di atas /accounts: numpang di
+    // sana, jejaknya harus dilipat supaya tabel akunnya kelihatan. Isinya polling ke
+    // `pipeline.status`, jadi tidak ada controller yang perlu.
+    Route::view('/pipeline', 'pipeline')->name('pipeline');
     Route::delete('/pipeline/queue/{queue?}', [PipelineController::class, 'clear'])->name('pipeline.clear');
     // Parameter opsional wajib di segmen terakhir, jadi kata kerjanya di depan —
     // `queue/{queue?}/retry` tidak pernah cocok untuk bentuk tanpa antrian.

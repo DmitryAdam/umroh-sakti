@@ -50,7 +50,7 @@
                 @auth
                     @php
                         $menu = Gate::allows('admin')
-                            ? ['posts' => 'post', 'accounts' => 'akun & pipeline', 'suggestions' => 'usulan saya', 'users' => 'pengguna']
+                            ? ['posts' => 'post', 'accounts' => 'akun', 'pipeline' => 'pipeline', 'suggestions' => 'usulan saya', 'users' => 'pengguna']
                             : ['suggestions' => 'usulan saya'];
                         $item = 'block rounded-md px-2 py-1.5 hover:bg-accent hover:text-accent-foreground';
                     @endphp

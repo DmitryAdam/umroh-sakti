@@ -251,6 +251,46 @@ class AccountPageTest extends TestCase
         Queue::assertPushed(fn (FetchAccount $job) => $job->account->username === 'ikut');
     }
 
+    public function test_daftar_dipotong_per_halaman_tapi_angkanya_dari_seluruh_akun(): void
+    {
+        foreach (range(1, 55) as $n) {
+            SourceAccount::create(['username' => "akun$n", 'status' => 'approved']);
+        }
+
+        // Angka & tombol kelompok dihitung dari seluruh akun, bukan dari sehalaman —
+        // "belum pernah di-scrap" yang ikut nomor halaman tidak bisa dipakai apa-apa.
+        $this->get(route('accounts'))
+            ->assertOk()
+            ->assertSee('55 akun ·', false)
+            ->assertSee('55 belum pernah di-scrap')
+            ->assertSee('halaman 1 dari 2');
+
+        $this->get(route('accounts', ['page' => 2]))->assertOk()->assertSee('halaman 2 dari 2');
+    }
+
+    public function test_setujui_semua_usulan_akun(): void
+    {
+        SourceAccount::create(['username' => 'usul1', 'status' => 'pending', 'suggested_by' => 'a@b.c']);
+        SourceAccount::create(['username' => 'usul2', 'status' => 'pending', 'suggested_by' => 'a@b.c']);
+        SourceAccount::create(['username' => 'blokir', 'status' => 'blocked']);
+
+        $this->get(route('accounts'))->assertOk()->assertSee('setujui semua (2)');
+
+        $this->post(route('accounts.bulk'), [
+            'action' => 'approve',
+            'ids' => SourceAccount::where('status', 'pending')->pluck('id')->all(),
+        ])->assertRedirect();
+
+        $this->assertSame(['approved', 'approved'], SourceAccount::whereIn('username', ['usul1', 'usul2'])->pluck('status')->all());
+        // Yang diblokir bukan usulan: tidak ikut terpilih, statusnya tidak berubah.
+        $this->assertSame('blocked', SourceAccount::where('username', 'blokir')->value('status'));
+    }
+
+    public function test_halaman_pipeline_terbuka(): void
+    {
+        $this->get(route('pipeline'))->assertOk()->assertSee('jejak detail');
+    }
+
     public function test_tidak_ada_scrap_semua(): void
     {
         // Tanpa filter, 189 akun masuk antrian ig yang cuma satu worker: kuota Graph
