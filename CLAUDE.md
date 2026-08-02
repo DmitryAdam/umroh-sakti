@@ -338,6 +338,23 @@ seperti akun yang bermasalah, padahal konfigurasi. `cmdFetch()` karena itu ikut
 pindah app untuk pesan ini, sama seperti `#4` — kegagalannya bisa diselamatkan app
 lain, dan kalau semua slot menjawab sama barulah itu benar-benar akunnya.
 
+Kalau semua slot menjawab sama, penyebabnya akun target: **personal (bukan
+Business/Creator) atau username salah ketik**. Meta memakai string yang sama untuk
+dua sebab yang berbeda — yang membedakan cuma `code`: `110`/subcode `2207013` =
+akun targetnya, sisanya slot. Terukur 2026-08-02: `umroh.bareng.id` (6.672
+pengikut, 271 post) dan `amanahumroh_id` (2.676 pengikut) dua-duanya hidup dan
+publik di instagram.com, dijawab `110` oleh ketiga slot, sementara
+`sunnatravel.id` + `umitourtravel_id` (titik & underscore yang sama) jalan normal.
+Status Professional cuma bisa diubah pemilik akunnya; tidak ada scope atau app
+review yang membukanya.
+
+Karena itu `FetchAccount` **memblokir akunnya** saat `Invalid user id` lolos sampai
+ke sini — putaran scrap berikutnya kegagalannya sudah pasti. Rotasi app di
+`cmdFetch()` yang bikin blokir itu aman: kalau sebabnya slot salah pasang,
+app lain menyelamatkannya dan blokirnya tidak pernah kejadian. Postnya tetap bisa
+masuk lewat `/suggestions` atau chrome extension — dua-duanya nol request ke Graph,
+jadi status akun tidak berpengaruh.
+
 Batasan: akun target wajib Professional (personal tidak terbaca sama sekali),
 tidak ada akses Story, media ID tidak bisa di-GET terpisah, rate limit berbasis
 app.

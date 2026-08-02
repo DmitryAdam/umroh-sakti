@@ -92,6 +92,19 @@ class AccountPageTest extends TestCase
         $this->assertNull($account->last_fetched_at, 'fetch gagal jangan distempel berhasil');
     }
 
+    public function test_akun_tak_terlihat_business_discovery_diblokir(): void
+    {
+        // Akun personal cuma bisa diubah pemiliknya — putaran scrap berikutnya pasti
+        // gagal lagi. probe.php sudah mencoba semua app slot sebelum melempar ini.
+        Process::fake(['*' => Process::result(
+            errorOutput: 'ERROR: Graph API HTTP 400: Invalid user id', exitCode: 1)]);
+        $account = SourceAccount::create(['username' => 'personal', 'status' => 'approved']);
+
+        (new FetchAccount($account, 2))->handle();
+
+        $this->assertTrue($account->refresh()->isBlocked(), 'akun yang tidak terlihat harus diblokir');
+    }
+
     public function test_alasan_gagal_dicatat_untuk_exception_apa_pun(): void
     {
         // Hook failed() dipanggil framework untuk semua kegagalan, termasuk yang tidak

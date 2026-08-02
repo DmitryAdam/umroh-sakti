@@ -110,6 +110,22 @@ class FetchAccount implements ShouldQueue
                 return;
             }
 
+            // Akun personal (bukan Business/Creator) tidak terlihat business_discovery
+            // sama sekali, dan itu keadaan yang cuma bisa diubah pemilik akunnya —
+            // tidak ada scope atau app review yang membukanya. Diulang tiap putaran
+            // scrap berarti kegagalan yang sudah pasti, jadi blokir sekalian; postnya
+            // masuk lewat /suggestions atau chrome extension yang tidak lewat Graph.
+            // Username salah ketik kena aturan yang sama, dan itu memang yang dimau.
+            //
+            // Aman dari salah blokir karena probe.php sudah mencoba SEMUA app slot
+            // sebelum melempar ini (lihat cmdFetch): `Invalid user id` juga muncul
+            // saat IG_USER_ID salah pasang dengan token, tapi itu per-slot — kalau
+            // ketiganya menjawab sama, yang salah akunnya.
+            if (str_contains($error, 'Invalid user id')) {
+                PipelineLog::write('ig', "@{$this->account->username}: tidak terlihat business_discovery (personal/tidak ada), diblokir");
+                $this->account->update(['status' => 'blocked']);
+            }
+
             // Bukan rate limit = username salah, token mati, atau response ditolak.
             // Diulang pun hasilnya sama, dan retryUntil 2 jam berarti stacktrace
             // penuh tiap 12 detik. Matikan sekali, biar kelihatan di failed_jobs.
