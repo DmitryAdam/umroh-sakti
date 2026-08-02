@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Console\Commands\QueueWork;
 use App\Models\Package;
 use App\Models\SourceAccount;
 use App\Support\PipelineLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -71,6 +73,27 @@ class PipelineController extends Controller
 
         PipelineLog::write($queue ?? 'run',
             '== ulangi antrian '.($queue ?? 'semua').": {$jumlah} job gagal dikembalikan ke antrian");
+
+        return response()->json($this->numbers());
+    }
+
+    /**
+     * Hentikan worker. Bukan `pkill` dari web: argv anak
+     * (`php artisan queue:work --queue=ig`) identik lintas project di server yang
+     * sama, jadi pola apa pun yang cocok dengan worker kita juga membunuh worker app
+     * tetangga. Yang ditulis cuma flag; loop induk `QueueWork` yang membacanya lalu
+     * mengirim SIGTERM ke anaknya sendiri.
+     *
+     * Beda dengan `clear()`: itu membuang job, ini menghentikan yang mengerjakan.
+     * Antriannya tetap utuh dan jalan lagi begitu `queue:work` dinyalakan.
+     *
+     * TTL 5 menit supaya flag yang ditekan saat tidak ada worker tidak menunggu
+     * selamanya; induk juga membuangnya sendiri saat start.
+     */
+    public function stop(): JsonResponse
+    {
+        Cache::put(QueueWork::STOP, true, 300);
+        PipelineLog::write('run', '== stop worker diminta dari panel');
 
         return response()->json($this->numbers());
     }

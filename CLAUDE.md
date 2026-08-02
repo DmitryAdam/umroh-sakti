@@ -969,6 +969,22 @@ disentuh di sini: retry mendorong payloadnya langsung, tidak lewat dispatcher, j
 lock `unique` tidak dicek ulang. Mayoritas isi `failed_jobs` memang layak diulang —
 worker di-Ctrl+C, `database is locked`, model timeout.
 
+**Stop worker ≠ batalkan antrian.** Tombol merah di panel (`POST /pipeline/stop`,
+`PipelineController::stop`) menghentikan yang **mengerjakan**, bukan yang dikerjakan:
+antriannya utuh dan lanjut sendiri begitu `queue:work` dinyalakan lagi. Jalurnya flag
+cache `QueueWork::STOP` yang dibaca loop induk sekali per detik, lalu induknya kirim
+SIGTERM ke anaknya sendiri dan berhenti menyalakan ulang. **Bukan `pkill` dari web**:
+argv anak (`php artisan queue:work --queue=ig`) identik lintas project, jadi pola apa
+pun yang cocok dengan worker kita juga membunuh worker app tetangga di server yang
+sama. `queue:restart` bawaan juga tidak bisa dipakai — anak yang keluar dinyalakan
+lagi oleh loop induk, jadi yang terjadi cuma restart.
+
+SIGTERM, bukan kill: job yang sedang dipegang diselesaikan dulu (satu carousel ke
+vision bisa menit-menitan), jadi panelnya tidak langsung sunyi. Flagnya ber-TTL 5
+menit **dan** dibuang induk saat start — kalau tidak, stop yang ditekan saat tidak
+ada worker akan mematikan worker berikutnya. Menyalakannya lagi cuma dari terminal;
+tidak ada tombol "jalankan".
+
 Panel juga menampilkan **sebab** kegagalan, bukan cuma jumlahnya
 (`antrian_per.{q}.pesan_gagal`): baris pertama `exception` kegagalan terakhir per
 antrian, diambil lewat `max(id)` — kolom itu stacktrace penuh, narik semua barisnya

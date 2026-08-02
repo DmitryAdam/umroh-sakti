@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\QueueWork;
 use App\Jobs\ExtractPost;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -27,6 +29,28 @@ class PipelineRetryTest extends TestCase
         // Panel pipeline itu alat kerja operator — grup `auth`.
         $this->actingAsOperator();
         $this->withoutMiddleware(ValidateCsrfToken::class);
+    }
+
+    /**
+     * Tombol stop cuma memasang flag; job yang antri tidak ikut dibuang.
+     *
+     * Bedanya dengan "batalkan": itu membuang job, ini menghentikan yang
+     * mengerjakan — antriannya jalan lagi begitu `queue:work` dinyalakan.
+     * Yang membaca flagnya loop induk `QueueWork`, bukan `pkill` dari web (argv
+     * anak identik lintas project di satu server).
+     */
+    public function test_stop_memasang_flag_tanpa_membuang_antrian(): void
+    {
+        $this->gagal('ai', '111');
+        DB::table('jobs')->insert([
+            'queue' => 'ai', 'payload' => '{}', 'attempts' => 0, 'available_at' => time(), 'created_at' => time(),
+        ]);
+
+        $this->postJson(route('pipeline.stop'))->assertOk();
+
+        $this->assertTrue(Cache::get(QueueWork::STOP), 'flag stop harus terpasang');
+        $this->assertSame(1, DB::table('jobs')->count(), 'job yang antri jangan ikut dibuang');
+        $this->assertSame(1, DB::table('failed_jobs')->count());
     }
 
     /** Satu baris failed_jobs dengan payload yang bisa dibaca ulang framework. */

@@ -123,6 +123,8 @@ Route::middleware(['auth', 'can:admin'])->group(function () {
     // `queue/{queue?}/retry` tidak pernah cocok untuk bentuk tanpa antrian.
     Route::post('/pipeline/queue/retry/{queue?}', [PipelineController::class, 'retry'])->name('pipeline.retry');
     Route::get('/pipeline/status', [PipelineController::class, 'status'])->name('pipeline.status');
+    // Hentikan workernya, bukan antriannya — job yang belum diambil tetap di `jobs`.
+    Route::post('/pipeline/stop', [PipelineController::class, 'stop'])->name('pipeline.stop');
 
     // Foto profil hasil download probe.php. Di luar public/ supaya tidak ikut
     // ter-deploy sebagai aset publik — ini alat kerja, sama seperti /accounts.

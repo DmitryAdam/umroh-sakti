@@ -6,6 +6,7 @@ use App\Jobs\ExtractPending;
 use App\Support\PipelineLog;
 use Illuminate\Contracts\Process\InvokedProcess;
 use Illuminate\Queue\Console\WorkCommand;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Symfony\Component\Console\Input\InputOption;
@@ -31,6 +32,16 @@ use Symfony\Component\Console\Input\InputOption;
 class QueueWork extends WorkCommand
 {
     protected $description = 'Jalankan worker semua antrian pipeline sekaligus (ig + ai + db)';
+
+    /**
+     * Kunci cache "berhenti sesudah job yang sedang jalan selesai" — dipasang tombol
+     * stop di /pipeline, dibaca loop induk. Kenapa lewat cache dan bukan pkill dari
+     * web: argv anak (`php artisan queue:work --queue=ig`) identik lintas project di
+     * server yang sama, jadi `pkill -f` juga membunuh worker app tetangga. Ini juga
+     * yang dipakai `queue:restart` bawaan — bedanya `restart` bikin induk menyalakan
+     * anaknya lagi, jadi tidak bisa dipakai untuk berhenti.
+     */
+    public const STOP = 'worker-stop';
 
     /**
      * Worker-nya diambil dari container yang sudah dirakit framework
@@ -111,6 +122,11 @@ class QueueWork extends WorkCommand
             }
         }
 
+        // Flag sisa dari sesi sebelumnya dibuang di sini, bukan dibiarkan kedaluwarsa:
+        // kalau tidak, tombol stop yang ditekan saat tidak ada worker akan mematikan
+        // worker berikutnya yang start.
+        Cache::forget(self::STOP);
+
         $jalan = [];
         foreach ($anak as $nama => $queue) {
             $jalan[$nama] = $this->spawn($nama, $queue, $berhenti);
@@ -144,8 +160,29 @@ class QueueWork extends WorkCommand
         // mati diam-diam, dan sampai mati itu mereka menahan kode lama di memori —
         // pernah kejadian, import dari antrian mem-prune pakai aturan yang sudah
         // diperbaiki 20 menit sebelumnya.
+        $stop = false;
+        $cek = 0;
+
         while ($jalan !== []) {
-            if ($berhenti === [] && time() >= $detak) {
+            // Sekali per detik, bukan tiap putaran: loopnya 200 ms dan cache-nya di
+            // SQLite yang sama dengan antrian.
+            if (! $stop && time() > $cek) {
+                $cek = time();
+
+                if (Cache::pull(self::STOP, false)) {
+                    $stop = true;
+                    // SIGTERM, bukan SIGKILL: worker Laravel menyelesaikan job yang
+                    // sedang dipegang dulu baru keluar. Job yang belum diambil tetap
+                    // di `jobs` dan dikerjakan begitu worker dinyalakan lagi.
+                    foreach ($jalan as $proses) {
+                        $proses->signal(SIGTERM);
+                    }
+                    $this->info('Stop diminta — menunggu job yang sedang jalan selesai.');
+                    PipelineLog::write('run', 'stop diminta dari panel: worker berhenti sesudah job sekarang selesai');
+                }
+            }
+
+            if (! $stop && $berhenti === [] && time() >= $detak) {
                 ExtractPending::dispatch();
                 $detak = time() + 900;
             }
@@ -157,7 +194,7 @@ class QueueWork extends WorkCommand
 
                 // --once / --stop-when-empty: anak memang disuruh berhenti, jangan
                 // dihidupkan lagi — kalau tidak, perintahnya tidak pernah selesai.
-                if ($berhenti !== []) {
+                if ($stop || $berhenti !== []) {
                     unset($jalan[$nama]);
 
                     continue;
@@ -175,6 +212,10 @@ class QueueWork extends WorkCommand
             }
 
             usleep(200_000);
+        }
+
+        if ($stop) {
+            PipelineLog::write('run', 'worker berhenti — nyalakan lagi dengan `php artisan queue:work`');
         }
 
         return self::SUCCESS;

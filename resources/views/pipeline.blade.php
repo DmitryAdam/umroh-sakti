@@ -16,6 +16,10 @@
     <div class="flex flex-wrap items-center gap-3">
         <button type="button" data-batal
                 class="rounded border border-stone-300 px-2 py-1 text-xs text-stone-700 disabled:opacity-40">Batalkan semua job</button>
+        {{-- Beda dari "batalkan": itu membuang job, ini menghentikan yang mengerjakan.
+             Antriannya utuh dan lanjut sendiri begitu `queue:work` dinyalakan lagi. --}}
+        <button type="button" data-stop
+                class="rounded border border-red-300 px-2 py-1 text-xs text-red-700">Stop worker</button>
         <div class="h-1.5 w-40 overflow-hidden rounded bg-stone-200">
             <div data-bar class="h-full w-0 bg-stone-900 transition-all"></div>
         </div>
@@ -173,6 +177,22 @@ const ulangi = async (queue) => {
         progress.textContent = 'gagal: ' + e.message;
     }
 };
+
+// Stop worker: job yang sedang dipegang tetap diselesaikan (SIGTERM, bukan kill),
+// sisanya menunggu di antrian sampai `queue:work` dinyalakan lagi dari terminal.
+document.querySelector('[data-stop]').addEventListener('click', async () => {
+    if (!confirm('Hentikan worker? Job yang sedang jalan diselesaikan dulu, sisanya menunggu di antrian.\n\nMenyalakannya lagi cuma bisa dari terminal: php artisan queue:work')) return;
+    progress.textContent = 'menghentikan worker…';
+    try {
+        render(await (await fetch('{{ route('pipeline.stop') }}', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrf },
+        })).json());
+        progress.textContent = 'stop diminta — tunggu job yang sedang jalan selesai (lihat jejak di bawah)';
+    } catch (e) {
+        progress.textContent = 'gagal: ' + e.message;
+    }
+});
 
 batal.addEventListener('click', () => batalkan(null));
 // Tombol per antrian ikut dirender ulang tiap polling, jadi listenernya di induknya.
