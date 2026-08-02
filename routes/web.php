@@ -63,6 +63,11 @@ Route::middleware('auth')->group(function () {
     // Gambar mentah: dipakai daftar "usulan saya" untuk menampilkan kiriman sendiri.
     Route::get('/posts/{media}/{index}.jpg', [PostController::class, 'raw'])
         ->whereNumber(['media', 'index'])->name('posts.raw');
+    // Hapus kiriman sendiri. Di `auth`, bukan `can:admin`: yang mengusulkan harus
+    // bisa menarik kirimannya sendiri. Batasannya di controller (pemilik + belum
+    // di-approve), bukan di route — perannya sama, hakikat barisnya yang beda.
+    Route::delete('/posts/{media}', [PostController::class, 'destroy'])
+        ->whereNumber('media')->name('posts.destroy');
     // Chrome extension, dirakit dari folder `extension/` saat diunduh. Di `auth`
     // dan bukan `can:admin`: peran `user` juga mengirim post lewat alat ini.
     //

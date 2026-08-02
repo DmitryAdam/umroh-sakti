@@ -117,6 +117,38 @@ class ManualPostTest extends TestCase
     }
 
     /**
+     * Hapus kiriman sendiri: raw dibuang, `excluded_posts` TIDAK ditulis — itu yang
+     * membedakannya dari blokir, dan itu yang bikin kiriman yang salah tanggal boleh
+     * dikirim ulang.
+     */
+    public function test_pengusul_bisa_menghapus_kiriman_sendiri(): void
+    {
+        $this->actingAsPengusul();
+        $this->kirim();
+
+        $this->delete(route('posts.destroy', self::MEDIA))->assertRedirect();
+
+        $this->assertDirectoryDoesNotExist(storage_path('raw/'.self::AKUN.'/'.self::MEDIA));
+        $this->assertDatabaseMissing('excluded_posts', ['media_id' => self::MEDIA]);
+    }
+
+    /**
+     * Kiriman orang lain tidak boleh dihapus peran `user` — route-nya cuma `auth`,
+     * jadi yang menahannya cek pemilik di controller. Tanpa itu siapa pun yang bisa
+     * login memegang tombol hapus atas kiriman semua orang.
+     */
+    public function test_pengusul_tidak_bisa_menghapus_kiriman_orang_lain(): void
+    {
+        $this->kirim();
+
+        $this->actingAsPengusul()
+            ->delete(route('posts.destroy', self::MEDIA))
+            ->assertForbidden();
+
+        $this->assertDirectoryExists(storage_path('raw/'.self::AKUN.'/'.self::MEDIA));
+    }
+
+    /**
      * Kiriman ulang DITOLAK, siapa pun yang mengirim. Menimpa berarti membuang raw +
      * hasil ekstraksi + baris paket se-media_id — tombol hapus paket yang sudah
      * di-review, cuma lewat pintu lain. Betulkan dari /posts, bukan dari sini.

@@ -19,6 +19,7 @@
   button:disabled { opacity: .5; cursor: default; }
   summary { cursor: pointer; font-size: 11px; margin-bottom: 4px;
             color: color-mix(in srgb, currentColor 60%, transparent); }
+  #gagal { margin: 8px 0 0; padding-left: 16px; font-size: 11px; color: #dc2626; }
 </style>
 
 <h1>Kirim post ke umroh-sakti</h1>
@@ -43,5 +44,17 @@
 
   <button>Simpan &amp; tutup</button>
 </form>
+
+<form id="grid" hidden>
+  <label>Jumlah post teratas
+    <input type="number" name="max" min="1" max="60" value="9">
+  </label>
+
+  <button>Kirim satu per satu</button>
+</form>
+
+<button id="stop" hidden>Hentikan sesudah post ini</button>
+
+<ul id="gagal" hidden></ul>
 
 <script src="popup.js"></script>

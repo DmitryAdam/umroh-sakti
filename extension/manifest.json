@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Umroh Sakti — kirim post",
-  "version": "3.0",
+  "version": "3.6",
   "description": "Kirim flyer paket umroh dari post Instagram ke portal Umroh Sakti sendiri: caption, semua slide carousel, dan akunnya.",
   "permissions": ["scripting", "storage", "tabs"],
   "host_permissions": [

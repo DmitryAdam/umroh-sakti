@@ -69,6 +69,40 @@ chrome.runtime.onMessage.addListener((msg, sender, balas) => {
     return true
   }
 
+  if (msg.grid) {
+    chrome.scripting
+      .executeScript({ target: { tabId: msg.grid }, func: kumpulLink })
+      .then(([{ result }]) => balas(result))
+      .catch(() => balas([]))
+
+    return true
+  }
+
+  if (msg.statusGrid) {
+    balas(antre)
+
+    return
+  }
+
+  // Berhenti di sela post, bukan di tengahnya: post yang sedang dikirim sudah
+  // menulis raw di portal, dan membatalkannya di tengah jalan berarti folder
+  // setengah jadi yang tidak ada yang membereskan.
+  if (msg.stopGrid) {
+    if (antre) antre.batal = true
+    balas(antre)
+
+    return
+  }
+
+  if (msg.mulaiGrid) {
+    if (antre?.jalan) return balas(antre)
+
+    jalanGrid(msg.mulaiGrid.tabId, msg.mulaiGrid.links)
+    balas(antre)
+
+    return
+  }
+
   // Tab tidak bisa menutup dirinya sendiri: window.close() cuma jalan untuk tab
   // yang dibuka script. Yang punya wewenangnya chrome.tabs, dan itu di sini.
   if (msg.tutup && sender.tab) {
@@ -131,6 +165,123 @@ async function kirim(data) {
   })
 }
 
+// Mode grid: satu tab dipakai ulang untuk membuka post satu per satu, lalu tiap
+// post lewat panen() + kirim() yang sama persis dengan tombol satuan — tidak ada
+// jalur kirim kedua yang bisa menyimpang. Loopnya di service worker, bukan di
+// popup: satu putaran 9 post makan menit-menitan dan popup Chrome menutup diri
+// begitu operator mengklik apa pun di luarnya.
+//
+// Post dibuka lewat navigasi tab, bukan klik thumbnail: dialog overlay bergantung
+// pada markup grid yang class-nya diacak, sementara URL permalinknya sudah ada di
+// href tiap tile.
+let antre = null
+
+async function jalanGrid(tabId, links) {
+  const asal = (await chrome.tabs.get(tabId).catch(() => ({}))).url
+  antre = { total: links.length, ke: 0, ok: 0, lewat: 0, gagal: [], jalan: true }
+
+  // Dicek sekali di depan, bukan per post: syarat yang sama untuk seluruh putaran,
+  // dan kalau tidak, sembilan post dibuka satu-satu cuma untuk gagal dengan sebab
+  // yang identik — belasan page load IG terbuang untuk galat yang sudah pasti.
+  if (!await chrome.permissions.contains({ origins: [`${await portal()}/*`] })) {
+    antre.jalan = false
+    antre.gagal.push('Alamat portal belum diatur. Buka pengaturan extension, isi alamatnya, lalu izinkan.')
+    lapor()
+
+    return
+  }
+
+  for (const url of links) {
+    if (antre.batal) break
+
+    antre.ke++
+    lapor()
+
+    try {
+      await chrome.tabs.update(tabId, { url })
+      await tungguMuat(tabId)
+      // IG merender isi postnya sesudah `complete`; tanpa jeda ini panen() membaca
+      // kerangka kosong dan postnya terhitung "gambar tidak terbaca".
+      await new Promise((r) => setTimeout(r, 1500))
+
+      const [{ result: data }] = await chrome.scripting.executeScript({ target: { tabId }, func: panen })
+
+      // Video/reel dan post yang gambarnya tidak terbaca dilewat, bukan digagalkan:
+      // pipeline memang tidak memprosesnya.
+      if (!data?.images?.length) {
+        antre.lewat++
+        continue
+      }
+
+      const hasil = await kirim(data)
+
+      // Post yang sudah ada ditolak portal, dan itu jawaban yang benar — bukan
+      // kegagalan. Tanpa dipisah, putaran kedua atas profil yang sama tampil
+      // sebagai sembilan galat merah.
+      if (!hasil?.ok && /sudah ada di sistem/.test(hasil?.pesan || '')) antre.lewat++
+      else hasil?.ok ? antre.ok++ : antre.gagal.push(`${kode(url)}: ${hasil?.pesan || 'gagal'}`)
+    } catch (e) {
+      antre.gagal.push(`${kode(url)}: ${e.message}`)
+    }
+  }
+
+  antre.jalan = false
+  lapor()
+  if (asal) chrome.tabs.update(tabId, { url: asal }).catch(() => {})
+}
+
+const kode = (url) => url.match(/\/(?:p|reel|tv)\/([\w-]+)/)?.[1] || url
+
+// Kemajuannya menempel di badge ikonnya, bukan cuma di popup: popup Chrome menutup
+// diri begitu operator mengklik apa pun di luarnya, sementara putarannya jalan
+// menit-menitan — tanpa badge satu-satunya cara tahu masih jalan atau tidak itu
+// membuka popupnya lagi. Badge cuma muat ~4 karakter, jadi yang dipasang sisa
+// postnya (selalu pendek); kalimat penuhnya di tooltip.
+const lapor = () => {
+  const sisa = antre.total - antre.ke
+  const kepala = antre.jalan
+    ? `Post ${antre.ke}/${antre.total}…`
+    : (antre.batal ? `Dihentikan di post ${antre.ke}/${antre.total}.` : `Selesai, ${antre.total} post.`)
+
+  chrome.action.setBadgeText({ text: antre.jalan ? String(sisa + 1) : (antre.gagal.length ? '!' : '✓') })
+  chrome.action.setBadgeBackgroundColor({ color: antre.jalan ? '#2563eb' : (antre.gagal.length ? '#dc2626' : '#16a34a') })
+  chrome.action.setTitle({
+    title: `${kepala} ${antre.ok} terkirim, ${antre.lewat} dilewat, ${antre.gagal.length} gagal.`,
+  })
+
+  // Popup boleh tidak ada — pesannya dilempar ke ruang kosong dan itu memang wajar.
+  chrome.runtime.sendMessage({ kabarGrid: antre }).catch(() => {})
+}
+
+function tungguMuat(tabId) {
+  return new Promise((selesai) => {
+    const habis = setTimeout(beres, 30_000)
+
+    function beres() {
+      clearTimeout(habis)
+      chrome.tabs.onUpdated.removeListener(cek)
+      selesai()
+    }
+
+    function cek(id, info) {
+      if (id === tabId && info.status === 'complete') beres()
+    }
+
+    chrome.tabs.onUpdated.addListener(cek)
+  })
+}
+
+// Jalan di halaman grid profil. Cuma `/p/` — reel dan tv itu video, dan satu
+// halaman IG yang dimuat percuma jauh lebih mahal daripada satu href yang dibuang.
+function kumpulLink() {
+  return [...new Set(
+    [...document.querySelectorAll('a[href*="/p/"]')]
+      .map((a) => a.getAttribute('href'))
+      .filter((h) => /^\/(?:[\w.]+\/)?p\/[\w-]+/.test(h || ''))
+      .map((h) => new URL(h, location.origin).href)
+  )]
+}
+
 // Jalan di dalam halaman Instagram.
 async function panen() {
   const tunggu = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -157,19 +308,41 @@ async function panen() {
   // tidak lagi membungkus baris penulis dengan <header> dan semua class-nya
   // diacak. Link profil selalu `/<handle>/` satu segmen — sisanya rute internal.
   const rute = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'direct', 'accounts', 'tv', 'about', 'legal'])
-  const kandidat = [...new Set(
-    [...(art.querySelectorAll('a[href^="/"]').length ? art : document).querySelectorAll('a[href^="/"]')]
-      .map((a) => a.getAttribute('href').match(/^\/([A-Za-z0-9._]+)\/?$/)?.[1])
-      .filter((u) => u && !rute.has(u))
-  )]
+  const anchor = [...(art.querySelectorAll('a[href^="/"]').length ? art : document).querySelectorAll('a[href^="/"]')]
+    .map((a) => ({ a, u: a.getAttribute('href').match(/^\/([A-Za-z0-9._]+)\/?$/)?.[1] }))
+    .filter((x) => x.u && !rute.has(x.u))
+
+  // Urut DOM saja tidak cukup: di halaman post penuh `art` jatuh ke body, dan link
+  // profil PERTAMA di dokumen itu nav kiri — akun yang sedang login, bukan penulis
+  // postnya. (Kejadian: semua usulan tercatat dari akun operatornya sendiri.)
+  // Jangkarnya `time` postingan: baris penulis dan jam posting bertetangga di DOM,
+  // sementara nav dan sidebar saran jauh dari keduanya.
+  const jam = art.querySelector('time[datetime]')
+  if (jam) {
+    const urutan = new Map([...document.querySelectorAll('*')].map((el, i) => [el, i]))
+    const jarak = (el) => Math.abs((urutan.get(el) ?? 1e9) - (urutan.get(jam) ?? 0))
+    anchor.sort((x, y) => jarak(x.a) - jarak(y.a))
+  }
+
+  const kandidat = [...new Set(anchor.map((x) => x.u))]
 
   // Slide carousel baru dimuat setelah tombol next diklik — tanpa loop ini yang
   // kebawa cuma slide pertama. 20 = batas `images` di PostController::store.
   const urls = new Map()
+  let dilihat = 0
+  let kekecilan = 0
   const pungut = () => {
     for (const img of art.querySelectorAll('img[src*="scontent"], img[src*="cdninstagram"]')) {
+      dilihat++
+
       // Avatar dan thumbnail sidebar ikut kejaring kalau tidak disaring ukuran.
-      if (img.naturalWidth < 320) continue
+      // `naturalWidth` 0 = belum selesai decode, bukan gambar kecil — popup dibuka
+      // seketika sesudah halaman muncul, jadi tanpa fallback ke lebar layout SEMUA
+      // gambarnya kebuang dan postnya kelihatan "tidak terbaca".
+      if ((img.naturalWidth || img.width) < 320) {
+        kekecilan++
+        continue
+      }
 
       // Video dilewat, aturan yang sama dengan probe.php: thumbnail-nya cuma satu
       // frame yang belum tentu memuat flyer, rawan jadi ekstraksi ngawur. Yang
@@ -181,6 +354,14 @@ async function panen() {
       urls.set(img.src.split('?')[0], img.src)
     }
   }
+
+  // Gambar yang belum termuat tidak punya ukuran apa pun. Ditunggu sebentar, bukan
+  // sampai selesai: satu gambar yang gagal dari CDN tidak boleh menahan panen.
+  await Promise.race([
+    Promise.all([...art.querySelectorAll('img')].filter((i) => !i.complete)
+      .map((i) => new Promise((r) => i.addEventListener('load', r, { once: true })))),
+    tunggu(3000),
+  ])
 
   pungut()
   for (let i = 0; i < 20; i++) {
@@ -216,5 +397,8 @@ async function panen() {
     posted_at: waktu ? new Date(waktu).toLocaleDateString('sv-SE') : '',
     images: [...urls.values()].slice(0, 20),
     video: !!art.querySelector('video'),
+    // Cuma untuk pesan galat: "0 gambar" saja tidak membedakan markup IG yang
+    // berubah (nol kandidat) dari saringan kita yang kelewat galak (semua kebuang).
+    jejak: `${dilihat} kandidat, ${kekecilan} kekecilan`,
   }
 }

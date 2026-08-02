@@ -120,6 +120,20 @@
                     <a href="{{ $item['permalink'] }}" target="_blank" rel="noopener"
                        class="underline underline-offset-4">{{ '@'.$item['account'] }}</a>
                     <span class="text-muted-foreground">{{ count($item['images']) }} gambar</span>
+                    {{-- Cuma selama masih usulan. Sesudah disetujui barisnya sudah jadi
+                         paket yang di-review orang lain, dan menariknya dari sini sama
+                         dengan tombol hapus paket yang terbuka untuk semua yang login —
+                         controllernya menolak dengan aturan yang sama. Hapus, bukan
+                         blokir: kiriman yang salah tanggal/permalink harus boleh
+                         dikirim ulang. --}}
+                    @if ($item['usulan'])
+                        <form method="POST" action="{{ route('posts.destroy', $item['media_id']) }}" class="ml-auto"
+                              onsubmit="return confirm('Hapus kiriman ini? Gambarnya dibuang, dan postnya boleh dikirim ulang.')">
+                            @csrf
+                            @method('DELETE')
+                            <button class="text-destructive underline underline-offset-4">hapus</button>
+                        </form>
+                    @endif
                 @endif
             </div>
         @empty

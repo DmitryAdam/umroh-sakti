@@ -732,6 +732,12 @@ privat yang sama dengan tombol per barisnya (`bacaUlang()`, `blokir()`) — tida
 kedua yang bisa menyimpang. Post yang rawnya sudah dibuang dilewat diam-diam saat
 `extract` dan dihitung di pesannya.
 
+**Kolom gambar cuma memuat slide pertama.** `posts.raw` melayani jpg RAW apa adanya
+(~500 KB), bukan thumbnail — 60 baris berisi carousel 14 slide berarti puluhan MB
+untuk petak 40×40 yang tidak ada yang melihatnya. Sisanya di balik `<details>`
+ber-`loading="lazy"`: gambar di dalam elemen tertutup tidak di-fetch sampai dibuka,
+jadi nol JS dan nol byte sampai ada yang benar-benar mau melihat.
+
 **Post yang tidak terjangkau fetch dimasukkan tangan lewat `/suggestions`.**
 `business_discovery` mengembalikan media urut **timestamp turun**, bukan urutan grid
 instagram.com — pinned post **tidak** diangkat ke atas. Terukur di `mahyaatourtravel`
@@ -768,6 +774,22 @@ Approval-nya satu tombol di `/posts` tab **usulan** (dan `/accounts` untuk akunn
 Untuk admin itu satu klik tambahan, dan itu harga yang murah untuk satu perilaku.
 Yang mau akun langsung jalan pakai textarea di `/accounts` — endpoint lain, memang
 punya admin.
+
+**Hapus ≠ blokir, dan tab usulan cuma punya yang pertama.** `DELETE /posts/{media}`
+(`destroy()`, grup `auth`) + `action=delete` di `POST /posts/bulk` membuang raw +
+hasil ekstraksi + baris paketnya lewat `hapusJejak()` **tanpa** menulis
+`excluded_posts` — jadi postnya boleh dikirim/di-scrap lagi. Itu justru gunanya:
+kiriman yang salah permalink/tanggal/akun ditarik lalu dikirim ulang, sementara
+blokir adalah vonis "bukan paket" yang sekalian menahan fetch. Tombol **hapus blokir**
+di tab usulan dulu tidak pernah mengerjakan apa pun (tidak ada yang diblokir di
+situ) — sekarang tab itu menampilkan **hapus**, tab lain tetap **hapus blokir**.
+
+Route-nya `auth`, bukan `can:admin`, karena yang mengusulkan harus bisa menarik
+kirimannya sendiri; yang menahannya cek di controller: admin bebas, peran lain cuma
+`_created_by` = dirinya **dan** `_suggested_by` masih ada. Sesudah disetujui barisnya
+sudah jadi paket yang di-review orang lain, dan pintu ini akan jadi tombol hapus
+paket yang terbuka untuk semua yang bisa login. Dijaga
+`pengusul_tidak_bisa_menghapus_kiriman_orang_lain`.
 
 **Kiriman ulang ditolak, tidak menimpa.** Menimpa berarti membuang raw + hasil
 ekstraksi + baris paket se-`media_id` — itu tombol hapus paket yang sudah di-review,
@@ -1112,6 +1134,29 @@ Konsekuensinya `fill.js` **tidak** didaftarkan lewat `content_scripts` di manife
 dinamis tidak selalu selamat dari restart browser. Izin hostnya `optional_host_permissions`
 yang diminta saat form options disimpan; `chrome.permissions.request` menolak panggilan
 tanpa gestur klik, jadi tempatnya memang di situ dan bukan di popup.
+
+**Mode grid mengemudikan tab, bukan mengambil datanya dari grid.** Tile di halaman
+profil memuat caption penuh (`alt` gambarnya) dan satu thumbnail, tapi **tidak**
+memuat tanggal posting maupun slide carousel lainnya — dan tanggal posting itu
+jangkar tahun yang wajib diisi dan tidak boleh dikira-kira. Jadi yang dipanen dari
+grid cuma daftar permalinknya (`kumpulLink()`, `/p/` saja: reel & tv itu video,
+dan satu halaman IG yang dimuat percuma jauh lebih mahal daripada satu href yang
+dibuang); sesudah itu tiap post dibuka satu per satu lewat `chrome.tabs.update` dan
+lewat `panen()` + `kirim()` yang **sama persis** dengan tombol satuan. Tidak ada
+jalur kirim kedua.
+
+Dibuka lewat navigasi URL, bukan klik thumbnail: dialog overlay bergantung pada
+markup grid yang class-nya diacak, sementara permalinknya sudah ada di `href` tiap
+tile. Loopnya di service worker (`jalanGrid()`), bukan di popup — satu putaran 9
+post makan menit-menitan dan popup Chrome menutup diri begitu operator mengklik apa
+pun di luarnya; popup yang dibuka lagi cuma membaca `antre` lewat `statusGrid`.
+Kemajuannya menempel di **badge ikonnya** (`chrome.action.setBadgeText`, sisa post —
+badge cuma muat ~4 karakter, kalimat penuhnya di `setTitle`), bukan cuma di popup:
+tanpa itu satu-satunya cara tahu putarannya masih jalan adalah membuka popupnya lagi.
+Izin host portal dicek **sekali di depan**, bukan per post — kalau tidak, sembilan
+post dibuka satu-satu cuma untuk gagal `belum-diatur` dengan sebab yang sudah pasti.
+Post yang sudah ada ditolak portal dan itu dihitung **dilewat**, bukan gagal:
+putaran kedua atas profil yang sama kalau tidak tampil sebagai sembilan galat merah.
 
 **Tidak ada endpoint, token, atau kolom baru untuk extension.** Kirimannya lewat tab
 tersembunyi ke `/suggestions` yang mengisi form itu lalu `fetch` POST-nya: cookie sesi,

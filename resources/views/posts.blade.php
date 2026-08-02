@@ -77,11 +77,22 @@
         <button form="bulk" name="action" value="block" data-confirm="Blokir"
                 data-catatan="Gambar + hasil ekstraksinya dibuang permanen; barisnya di excluded_posts tinggal sebagai penahan fetch."
                 class="rounded border border-red-300 bg-white px-2 py-1 text-red-700 hover:bg-red-50">Blokir terpilih</button>
-        {{-- Kebalikannya: barisnya `excluded_posts` dibuang, tidak ada file yang
-             disentuh. Gambarnya baru ada lagi setelah scrap berikutnya. --}}
-        <button form="bulk" name="action" value="unblock"
-                title="buang barisnya di excluded_posts; gambarnya baru ada setelah scrap berikutnya"
-                class="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-100">Hapus blokir</button>
+        {{-- Di tab usulan tidak ada yang diblokir, jadi "hapus blokir" di situ cuma
+             tombol yang tidak pernah mengerjakan apa pun. Yang masuk akal di sana
+             kebalikan dari setujui: buang kirimannya. Bukan blokir — kiriman yang
+             salah permalink/tanggal harus boleh dikirim ulang, dan barisnya
+             `excluded_posts` justru yang menahannya. --}}
+        @if ($f === 'suggestions')
+            <button form="bulk" name="action" value="delete" data-confirm="Hapus usulan"
+                    data-catatan="Gambar + hasil ekstraksinya dibuang. Postnya TIDAK diblokir — boleh dikirim ulang."
+                    class="rounded border border-red-300 bg-white px-2 py-1 text-red-700 hover:bg-red-50">Hapus terpilih</button>
+        @else
+            {{-- Kebalikan blokir: barisnya `excluded_posts` dibuang, tidak ada file
+                 yang disentuh. Gambarnya baru ada lagi setelah scrap berikutnya. --}}
+            <button form="bulk" name="action" value="unblock"
+                    title="buang barisnya di excluded_posts; gambarnya baru ada setelah scrap berikutnya"
+                    class="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-100">Hapus blokir</button>
+        @endif
     </div>
 </div>
 
@@ -113,15 +124,32 @@
                     </td>
                     <td class="px-2 py-1.5">
                         @if ($post['images'])
-                            {{-- Klik = gambar aslinya di tab baru. --}}
+                            {{-- Slide pertama saja. Route `posts.raw` melayani jpg RAW apa
+                                 adanya (~500 KB per gambar, bukan thumbnail), jadi satu
+                                 halaman 60 baris yang memuat carousel 14 slide berarti
+                                 puluhan MB untuk petak 40x40. Sisanya di balik <details>:
+                                 `loading=lazy` di dalam elemen tertutup memang tidak
+                                 di-fetch sampai dibuka, jadi nol JS dan nol byte sampai
+                                 ada yang benar-benar mau melihatnya. --}}
                             <div class="flex gap-1">
-                                @foreach ($post['images'] as $src)
-                                    <a href="{{ $src }}" target="_blank" rel="noopener">
-                                        <img src="{{ $src }}" alt="slide {{ $loop->index }}" loading="lazy"
-                                             class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
-                                    </a>
-                                @endforeach
+                                <a href="{{ $post['images'][0] }}" target="_blank" rel="noopener">
+                                    <img src="{{ $post['images'][0] }}" alt="slide 0" loading="lazy"
+                                         class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
+                                </a>
                             </div>
+                            @if (count($post['images']) > 1)
+                                <details class="mt-1">
+                                    <summary class="cursor-pointer text-stone-500">+{{ count($post['images']) - 1 }}</summary>
+                                    <div class="mt-1 flex flex-wrap gap-1">
+                                        @foreach (array_slice($post['images'], 1) as $i => $src)
+                                            <a href="{{ $src }}" target="_blank" rel="noopener">
+                                                <img src="{{ $src }}" alt="slide {{ $i + 1 }}" loading="lazy"
+                                                     class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
+                                            </a>
+                                        @endforeach
+                                    </div>
+                                </details>
+                            @endif
                         @elseif ($post['alasan'])
                             <span class="text-stone-400">file raw sudah dihapus</span>
                         @else

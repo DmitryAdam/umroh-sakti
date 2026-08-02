@@ -101,7 +101,7 @@ class PostController extends Controller
     public function bulk(Request $request): RedirectResponse
     {
         $data = $request->validate([
-            'action' => 'required|in:extract,block,unblock',
+            'action' => 'required|in:extract,block,unblock,delete',
             'media' => 'required|array',
             'media.*' => 'string',
         ]);
@@ -114,6 +114,18 @@ class PostController extends Controller
 
             return back()->with('status', "$n blokir dihapus — postnya ikut lagi di scrap berikutnya, "
                 .'gambarnya baru ada setelah itu.');
+        }
+
+        // Hapus: raw + hasil ekstraksi + baris paketnya dibuang, `excluded_posts`
+        // tidak ditulis — jadi postnya boleh masuk lagi. Itu bedanya dengan blokir,
+        // dan itu yang dimau di tab usulan: menolak kiriman yang salah bukan vonis
+        // "post ini bukan paket".
+        if ($data['action'] === 'delete') {
+            foreach ($data['media'] as $media) {
+                $this->hapusJejak($media, $this->akun($media));
+            }
+
+            return back()->with('status', count($data['media']).' post dihapus — tidak diblokir, jadi boleh dikirim/di-scrap lagi.');
         }
 
         $kena = 0;
@@ -154,6 +166,40 @@ class PostController extends Controller
 
         return back()->with('status', "Post $media masuk antrian ai — gambar + caption dibaca ulang lewat gerbang vision. "
             .'Pastikan `php artisan queue:work` jalan.');
+    }
+
+    /**
+     * Hapus satu post: raw + hasil ekstraksi + baris paketnya, tanpa menulis
+     * `excluded_posts`.
+     *
+     * Beda dengan **blokir**, dan bedanya bukan kosmetik: blokir itu vonis "post ini
+     * bukan paket" yang sekalian menahan fetch berikutnya, sementara ini menarik
+     * kembali kiriman yang salah — permalink keliru, tanggal posting salah, akun
+     * salah. Barisnya `excluded_posts` sengaja tidak ditulis supaya postnya boleh
+     * dikirim ulang; itu justru gunanya.
+     *
+     * Wewenangnya dua lapis karena route-nya `auth` (peran `user` ikut):
+     * admin boleh apa saja, peran lain cuma kirimannya sendiri dan cuma selama
+     * belum disetujui — sesudah disetujui barisnya sudah jadi paket yang di-review
+     * orang lain, dan menghapusnya lewat pintu ini sama dengan tombol hapus paket
+     * yang terbuka untuk siapa pun yang bisa login.
+     */
+    public function destroy(Request $request, string $media): RedirectResponse
+    {
+        $user = $this->akun($media);
+        $json = $user === null
+            ? []
+            : (json_decode((string) @file_get_contents(storage_path("raw/$user/$media/post.json")), true) ?: []);
+
+        abort_unless(
+            $request->user()->isAdmin()
+                || (($json['_created_by'] ?? null) === $request->user()->email && isset($json['_suggested_by'])),
+            403,
+        );
+
+        $this->hapusJejak($media, $user);
+
+        return back()->with('status', "Kiriman $media dihapus. Kalau datanya cuma salah, kirim ulang dari halaman usulan.");
     }
 
     /**
