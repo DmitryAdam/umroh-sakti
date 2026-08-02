@@ -416,4 +416,35 @@ class PublicSearchTest extends TestCase
             ->assertSee(route('package.show', $panjang), false)
             ->assertDontSee(route('package.show', $pendek), false);
     }
+
+    /**
+     * Halaman pertama dipotong; sisanya diambil lewat fetch dan yang dibalas cuma
+     * kartunya (partial yang sama), bukan halaman penuh — kalau ikut layout,
+     * `insertAdjacentHTML` menempelkan header + footer kedua ke dalam grid.
+     */
+    public function test_hasil_dipotong_dan_halaman_berikutnya_cuma_kartu(): void
+    {
+        for ($i = 0; $i < 26; $i++) {
+            $this->package(['guide_name' => "Ustadz $i"]);
+        }
+
+        $satu = $this->get('/')->assertOk()
+            ->assertSee('>26</span> paket', false)   // total, bukan sebanyak halaman ini
+            ->assertSee('muat lebih banyak');
+        $this->assertSame(24, substr_count($satu->getContent(), 'id="p'));
+
+        $dua = $this->get('/?page=2', ['X-Requested-With' => 'XMLHttpRequest'])->assertOk()
+            ->assertDontSee('<html', false)
+            ->assertDontSee('muat lebih banyak');   // halaman terakhir: sentinelnya hilang
+        $this->assertSame(2, substr_count($dua->getContent(), 'id="p'));
+    }
+
+    /**
+     * Halaman tentang: publik dan benar-benar dirender. Tiap halaman baru butuh satu
+     * assertOk() — komponen void yang lupa `/>` cuma tumbang saat view-nya di-compile.
+     */
+    public function test_halaman_tentang_terbuka_untuk_tamu(): void
+    {
+        $this->get('/about')->assertOk()->assertSee('Tentang Umroh Sakti');
+    }
 }

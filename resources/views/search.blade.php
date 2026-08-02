@@ -27,9 +27,6 @@
     $bare = 'min-w-0 cursor-pointer bg-transparent text-xs outline-none placeholder:text-muted-foreground';
     // Caption tiap filter: ikon + teks di atas kontrolnya.
     $caption = 'flex items-center gap-1.5 text-xs font-medium text-foreground';
-    // Tombol aksi per kartu (pratinjau lokal). Semuanya sebaris di bawah gambar,
-    // tooltipnya `title` bawaan browser — tidak perlu library.
-    $aksi = 'grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50';
 @endphp
 
 {{-- Bar cari duduk DI DALAM header (`@section('bar')`, dirender layout di baris
@@ -52,15 +49,22 @@
         <x-ui.combo name="sort" icon="sort" size="lg" submit placeholder="urutkan"
                     :value="$sort" :options="App\Http\Controllers\PackageSearchController::SORTS" />
 
-        {{-- Filter sisanya di popover <details>: tetap satu form. --}}
-        <details class="relative">
+        {{-- Filter sisanya di popover <details>: tetap satu form.
+
+             `relative` cuma dari sm ke atas. Di HP tombol filter duduk di tengah
+             baris, jadi `right-0` yang diukur dari tombolnya menaruh kotak 88vw
+             itu setengah keluar layar (kepotong `overflow-x: clip`). Tanpa
+             `relative`, jangkarnya jadi <header> yang sticky + selebar viewport,
+             dan `top-full` jatuh di bawah seluruh header — bukan di bawah
+             tombolnya, yang di HP memang lebih benar. --}}
+        <details class="sm:relative">
             <summary class="flex h-10 cursor-pointer select-none items-center gap-1.5 rounded-xl border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent/40 marker:content-none [&::-webkit-details-marker]:hidden">
                 <x-ui.icon name="filter" />
                 filter
                 @if ($aktif)<x-ui.badge variant="default">{{ count($aktif) }}</x-ui.badge>@endif
             </summary>
 
-            <x-ui.card class="absolute right-0 top-full z-40 mt-2 grid w-[min(40rem,88vw)] gap-4 p-4 sm:grid-cols-2">
+            <x-ui.card class="absolute right-4 top-full z-40 mt-2 grid w-[min(40rem,calc(100vw-2rem))] gap-4 p-4 sm:right-0 sm:grid-cols-2">
                 @foreach ($facets as $param => $pilihan)
                     {{-- Kolom dengan satu nilai saja tidak perlu select (status saat publik). --}}
                     @continue (count($pilihan) < 2)
@@ -117,6 +121,11 @@
                             <x-ui.icon name="x" /> reset
                         </x-ui.button>
                     @endif
+                    {{-- Tutup tanpa menerapkan. <details> tidak punya tombol tutup
+                         selain summary-nya, dan di HP summary itu ada di atas kotak
+                         yang setinggi layar. `type=button` wajib — default submit. --}}
+                    <x-ui.button type="button" variant="outline" size="sm"
+                                 onclick="this.closest('details').open = false">tutup</x-ui.button>
                     <x-ui.button size="sm">Terapkan</x-ui.button>
                 </div>
             </x-ui.card>
@@ -153,144 +162,14 @@
 @endsection
 
 {{-- Jumlah hasil pindah keluar bar: di header ia berebut tempat dengan kontrol
-     yang benar-benar diklik. --}}
-<p class="mb-3 text-xs text-muted-foreground"><span data-count>{{ $packages->count() }}</span> paket</p>
+     yang benar-benar diklik. `total()`, bukan `count()`: yang kedua cuma sebanyak
+     halaman ini. Angka ini tetap dikurangi JS saat kartu dibuang di pratinjau. --}}
+<p class="mb-3 text-xs text-muted-foreground"><span data-count>{{ $packages->total() }}</span> paket</p>
 
 {{-- Maksimal 8 kolom di layar lebar; di bawah itu jumlahnya turun per breakpoint.
      Pilihan manual dipasang inline dari JS, jadi menimpa semua breakpoint. --}}
 <div id="grid" data-view="grid" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 min-[1800px]:grid-cols-8">
-    @forelse ($packages as $package)
-        @php $flyers = $package->flyers(); @endphp   {{-- sudah disaring ke gambar yang memuat detail paket --}}
-        {{-- Seluruh kartu membuka lightbox (lihat JS di bawah), bukan cuma judulnya.
-             Sengaja tanpa overlay <a> yang menutupi kartu: overlay itu memakan
-             gesture geser carousel flyernya. --}}
-        <x-ui.card as="article" id="p{{ $package->id }}"
-                   class="relative flex cursor-pointer scroll-mt-20 flex-col overflow-hidden transition-shadow hover:shadow-md">
-            @if ($flyers)
-                {{-- Carousel pakai scroll-snap bawaan browser: geser/swipe, tanpa JS.
-                     `data-flyer` dipakai CSS tampilan daftar buat menaruhnya di kolom kiri. --}}
-                <div data-flyer class="relative bg-muted">
-                    <div class="flex snap-x snap-mandatory overflow-x-auto">
-                        @foreach ($flyers as $url)
-                            <img src="{{ $url }}" alt="Flyer dari &#64;{{ $package->source_account }}" loading="lazy"
-                                 class="aspect-[4/5] w-full shrink-0 snap-center object-contain">
-                        @endforeach
-                    </div>
-                    @if (count($flyers) > 1)
-                        <span class="pointer-events-none absolute bottom-2 right-2 rounded-md bg-foreground/60 px-1.5 py-0.5 text-[10px] text-background">{{ count($flyers) }}</span>
-                    @endif
-                </div>
-            @endif
-
-            @if ($preview ?? false)
-                {{-- Aksi kartu, semuanya di bawah gambar. `data-gone` = barisnya
-                     hilang setelah aksi (baca ulang bikin baris baru saat import).
-                     `data-aksi`/`data-isi` dipakai CSS tampilan daftar: di sana yang
-                     duduk di samping gambar harus teksnya, bukan bar tombol ini. --}}
-                <div data-aksi class="flex items-center gap-1 border-b bg-muted/40 px-2 py-1">
-                    <button type="button" data-post="{{ route('package.reextract', $package) }}" data-gone
-                            title="Baca ulang pakai AI — gambarnya dikirim lagi ke vision, paketnya disusun & diklasifikasi ulang"
-                            class="{{ $aksi }}"><x-ui.icon name="sparkles" /></button>
-                    <button type="button" data-post="{{ route('package.refetch', $package) }}" data-gone
-                            title="Segarkan — postingannya di-download ulang dari Instagram lalu dibaca ulang, paketnya disusun dari nol"
-                            class="{{ $aksi }}"><x-ui.icon name="refresh" /></button>
-                    {{-- Status publikasi. Perubahannya langsung disimpan (PATCH), tanpa
-                         tombol simpan: satu kolom, satu pilihan tertutup. --}}
-                    <select data-status="{{ route('package.status', $package) }}"
-                            title="Status publikasi — cuma `published` yang tampil ke pengunjung"
-                            class="ml-1 h-7 cursor-pointer rounded-md border border-input bg-background px-1.5 text-xs outline-none focus:border-ring">
-                        @foreach (App\Models\Package::STATUSES as $status)
-                            <option value="{{ $status }}" @selected($package->status === $status)>{{ $status }}</option>
-                        @endforeach
-                    </select>
-                    <button type="button" data-delete="{{ route('package.destroy', $package) }}"
-                            title="Bukan flyer umroh — buang paketnya & kecualikan postnya dari scrap berikutnya"
-                            class="{{ $aksi }} ml-auto hover:bg-destructive hover:text-background"><x-ui.icon name="x" /></button>
-                </div>
-            @endif
-
-            <div data-isi class="flex flex-1 flex-col gap-1 p-3 text-sm">
-                {{-- Lightbox: href-nya tetap halaman detail, jadi tanpa JS / klik-tengah
-                     tetap jalan. Yang di-klik biasa dicegat dan diambil lewat fetch. --}}
-                <a href="{{ route('package.show', ['package' => $package] + (($preview ?? false) ? ['all' => 1] : [])) }}"
-                   data-detail class="font-semibold leading-snug tracking-tight hover:underline">
-                    <span class="font-mono text-[10px] font-normal text-muted-foreground">#{{ $package->id }}</span>
-                    {{ $package->departure_city ?? 'Kota ?' }} &middot;
-                    {{ $package->duration_days ? $package->duration_days . ' hari' : 'durasi ?' }}
-                    @if ($package->extension !== 'none') &middot; +{{ $package->extension }} @endif
-                </a>
-
-                <p class="flex items-center gap-1 text-xs text-muted-foreground">
-                    {{-- Rentang: tanggal pulang dihitung dari durasi, biar tidak dihitung sendiri. --}}
-                    <x-ui.icon name="calendar" />
-                    <span class="truncate">{{ $package->dateLabel() ?? 'Tanggal ?' }}
-                        @if ($package->date_certainty !== 'exact')({{ $package->date_certainty }})@endif</span>
-                </p>
-                @if ($package->airline)
-                    <p class="flex items-center gap-1 text-xs text-muted-foreground">
-                        <x-ui.icon name="plane" /><span class="truncate">{{ $package->airline }}</span>
-                    </p>
-                @endif
-
-                @if ($harga = $package->prices())
-                    <dl class="mt-1 grid grid-cols-[auto_1fr] items-baseline gap-x-2">
-                        @foreach ($harga as $occupancy => $amount)
-                            <dt class="text-xs capitalize text-muted-foreground">{{ $occupancy }}</dt>
-                            <dd class="text-right font-medium tabular-nums text-accent2">
-                                {{ number_format($amount / 1000000, 1, ',', '.') }} jt
-                                @if ($package->price_starting_from)<span class="text-[10px] font-normal text-muted-foreground">mulai</span>@endif
-                            </dd>
-                        @endforeach
-                    </dl>
-                @endif
-
-                @if ($package->convertedFromUsd())
-                    <p class="text-[10px] text-muted-foreground">konversi dari USD, kurs {{ number_format((int) config('umroh.usd_rate'), 0, ',', '.') }}</p>
-                @endif
-
-                @php $stays = array_filter(['Makkah' => $package->hotel_makkah, 'Madinah' => $package->hotel_madinah]); @endphp
-                @foreach ($stays as $city => $raw)
-                    <p class="flex items-center gap-1 text-xs" title="{{ $city }}: {{ $raw }}">
-                        <x-ui.icon name="hotel" class="text-muted-foreground" />
-                        <span class="truncate"><span class="text-muted-foreground">{{ Str::substr($city, 0, 3) }}</span> {{ $raw }}</span>
-                    </p>
-                @endforeach
-
-                @if ($package->guide_name)
-                    <p class="flex items-center gap-1 text-xs">
-                        <x-ui.icon name="user" class="text-muted-foreground" /><span class="truncate">{{ $package->guide_name }}</span>
-                    </p>
-                @endif
-
-                @if ($package->facilities_raw)
-                    {{-- Fasilitas apa adanya dari flyer/caption: `facilities` cuma kode
-                         yang kenal di FACILITY_CODES, sisanya cuma ada di sini. --}}
-                    <p class="truncate text-xs text-muted-foreground" title="{{ $package->facilities_raw }}">{{ $package->facilities_raw }}</p>
-                @endif
-
-                <div class="mt-auto flex flex-wrap items-center gap-2 pt-2">
-                    <a href="{{ $package->source_permalink }}" rel="nofollow noopener" target="_blank"
-                       class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground underline underline-offset-4 @if (! $package->source_permalink) pointer-events-none opacity-50 @endif"
-                    ><x-ui.icon name="at" /><span class="truncate">{{ $package->source_account ?? '-' }}</span></a>
-                    {{-- Tombol "saring ke akun ini" dibuang: facet `Akun travel` di
-                         popover filter sudah bisa dicari, dan tombol per kartu bikin
-                         baris akun ramai tanpa menambah jalan yang belum ada. --}}
-                    @if ($package->reposts)
-                        <x-ui.badge variant="outline">+{{ count($package->reposts) }} repost</x-ui.badge>
-                    @endif
-                </div>
-
-                @include('partials.warnings')
-
-                {{-- "catatan & jejak" (form penilaian manusia) sementara dilepas dari
-                     kartu. Endpoint POST /paket/{id}/feedback masih ada. --}}
-            </div>
-        </x-ui.card>
-    @empty
-        <p class="col-span-full rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-            Tidak ada hasil
-        </p>
-    @endforelse
+    @include('partials.cards')
 </div>
 
 {{-- Lightbox detail. <dialog> bawaan browser: Esc & fokusnya sudah ditangani,
@@ -350,6 +229,52 @@ kolomCombo.addEventListener('change', () => {
 comboPilih(kolomCombo, kolom);   // label combo ikut nilai yang tersimpan
 terapkanTampilan();
 
+// Gulir tak berujung. Halaman berikutnya diambil lewat fetch dan kartunya
+// ditempel ke grid yang sama — `index()` membalas partial kartu saja kalau
+// request-nya ajax, jadi tidak ada markup kedua yang bisa menyimpang.
+//
+// Kenapa bukan render semua sekaligus seperti dulu: tiap kartu memanggil
+// `flyers()` (baca disk) dan memuat gambarnya, jadi 600 paket = 600 kali itu
+// sebelum satu piksel tampil. Yang dilihat orang cuma layar pertama.
+{
+    let sibuk = false;
+    const muat = async () => {
+        const tombol = document.querySelector('[data-more]');
+        if (!tombol || sibuk) return;
+        sibuk = true;
+        tombol.textContent = 'memuat…';
+        try {
+            const res = await fetch(tombol.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!res.ok) throw new Error(res.status);
+            grid.insertAdjacentHTML('beforeend', await res.text());
+            // Tombolnya ikut di balasan (atau tidak, kalau itu halaman terakhir),
+            // jadi yang lama dibuang dan sentinelnya ikut hilang sendiri.
+            tombol.closest('div').remove();
+        } catch (e) {
+            tombol.textContent = 'gagal memuat, coba lagi';
+        }
+        sibuk = false;
+        pantau();
+    };
+
+    // rootMargin: mulai memuat sebelum sentinelnya benar-benar kelihatan.
+    const observer = new IntersectionObserver(
+        (entries) => entries.some((e) => e.isIntersecting) && muat(),
+        { rootMargin: '600px' },
+    );
+    const pantau = () => {
+        const tombol = document.querySelector('[data-more]');
+        if (tombol) observer.observe(tombol);
+    };
+    pantau();
+
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('[data-more]')) return;
+        event.preventDefault();
+        muat();
+    });
+}
+
 const lightbox = document.getElementById('lightbox');
 const lightboxBody = lightbox.querySelector('[data-body]');
 
@@ -403,7 +328,11 @@ document.addEventListener('click', async (event) => {
         // Barisnya hilang: dibuang, atau dibaca ulang (baris barunya lahir saat import).
         if (button.dataset.delete !== undefined || button.dataset.gone !== undefined) {
             card.remove();
-            document.querySelector('[data-count]').textContent = document.querySelectorAll('article[id^=p]').length;
+            // Dikurangi satu, bukan dihitung ulang dari DOM: angkanya sekarang
+            // total seluruh hasil, sementara yang di DOM cuma halaman yang sudah
+            // digulir.
+            const jumlah = document.querySelector('[data-count]');
+            jumlah.textContent = Math.max(0, +jumlah.textContent - 1);
             return;
         }
 

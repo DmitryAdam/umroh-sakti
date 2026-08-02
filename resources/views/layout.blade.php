@@ -103,6 +103,9 @@
     <footer class="fixed inset-x-0 bottom-0 z-40 border-t bg-background/85 px-4 py-3 text-xs text-muted-foreground backdrop-blur">
         Data dikumpulkan dari postingan publik travel. Selalu konfirmasi ke travel
         bersangkutan sebelum melakukan pembayaran.
+        {{-- Di footer, bukan di menu burger: burgernya cuma muncul untuk yang sudah
+             login, sementara halaman ini justru untuk pengunjung. --}}
+        <a href="{{ route('about') }}" class="underline underline-offset-4 hover:text-foreground">Tentang</a>
     </footer>
 </body>
 </html>

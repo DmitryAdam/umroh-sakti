@@ -135,7 +135,24 @@ class PackageSearchController extends Controller
                 'date_desc' => 'departure_date is null, departure_date desc',
                 default => 'departure_date is null, departure_date asc',
             })
-            ->get();
+            // Dulu ->get(): tiap kartu memanggil flyers() (baca disk) dan memuat
+            // gambarnya, jadi 600 paket berarti 600 kali itu sebelum satu piksel
+            // tampil — padahal yang dilihat orang cuma layar pertama. Sisanya
+            // menyusul lewat gulir tak berujung (lihat partials/cards).
+            ->paginate(24)
+            ->withQueryString();
+
+        // Halaman berikutnya diambil lewat fetch: yang dibalas cuma kartunya,
+        // ditempel ke grid yang sudah ada. Markupnya partial yang sama dengan
+        // render halaman penuh — tidak ada jalur render kedua.
+        if ($request->ajax()) {
+            return view('partials.cards', [
+                'packages' => $packages,
+                'preview' => $preview,
+                // partials/warnings ikut dirender per kartu dan membacanya.
+                'reference' => (int) config('umroh.bpiu_reference'),
+            ]);
+        }
 
         return view('search', [
             'packages' => $packages,

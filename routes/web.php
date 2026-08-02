@@ -32,6 +32,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [PackageSearchController::class, 'index'])->name('search');
 Route::get('/packages/{package}', [PackageSearchController::class, 'show'])->name('package.show');
+// Halaman statis: cuma teks, tidak ada data yang perlu diambil controller.
+Route::view('/about', 'about')->name('about');
 Route::get('/flyers/{media}/{index}.jpg', FlyerThumbController::class)
     ->whereNumber(['media', 'index'])
     ->name('flyer');
