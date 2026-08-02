@@ -125,6 +125,9 @@ Route::middleware(['auth', 'can:admin'])->group(function () {
     Route::get('/pipeline/status', [PipelineController::class, 'status'])->name('pipeline.status');
     // Hentikan workernya, bukan antriannya — job yang belum diambil tetap di `jobs`.
     Route::post('/pipeline/stop', [PipelineController::class, 'stop'])->name('pipeline.stop');
+    // Berapa worker paralel per antrian. Setelan, bukan perintah: induk `queue:work`
+    // yang menyusul dalam ≤1 detik.
+    Route::post('/pipeline/workers/{queue}', [PipelineController::class, 'workers'])->name('pipeline.workers');
 
     // Foto profil hasil download probe.php. Di luar public/ supaya tidak ikut
     // ter-deploy sebagai aset publik — ini alat kerja, sama seperti /accounts.

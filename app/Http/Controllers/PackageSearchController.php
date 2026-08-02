@@ -89,14 +89,20 @@ class PackageSearchController extends Controller
                 ->orWhere('hotel_madinah', 'like', "%$hotel%"));
         }
         // Cari bebas: yang sering dicari orang tapi bukan pilihan tertutup —
-        // nama pembimbing, hotel, kota, maskapai sekaligus.
+        // nama pembimbing, hotel, kota, maskapai, plus travelnya. Nama travel itu
+        // akun IG-nya: username di kolom paket, nama tampilan di source_accounts
+        // (subquery, bukan join — satu paket satu akun dan filternya opsional).
         if ($cari = $request->string('q')->toString()) {
             $query->where(fn ($q) => $q
                 ->where('guide_name', 'like', "%$cari%")
                 ->orWhere('hotel_makkah', 'like', "%$cari%")
                 ->orWhere('hotel_madinah', 'like', "%$cari%")
                 ->orWhere('departure_city', 'like', "%$cari%")
-                ->orWhere('airline', 'like', "%$cari%"));
+                ->orWhere('airline', 'like', "%$cari%")
+                ->orWhere('source_account', 'like', "%$cari%")
+                ->orWhereIn('source_account', SourceAccount::query()
+                    ->where('full_name', 'like', "%$cari%")
+                    ->select('username')));
         }
         // Saklar "ada harga"/"ada tanggal" tidak ada lagi: keduanya sekarang syarat
         // masuk DB (ImportExtractedPackages::belumLengkap), jadi filternya pasti

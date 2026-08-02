@@ -53,6 +53,24 @@ class PipelineRetryTest extends TestCase
         $this->assertSame(1, DB::table('failed_jobs')->count());
     }
 
+    /**
+     * Jumlah worker per antrian: setelan di cache, dijepit 0..MAX_WORKERS, dan
+     * antrian yang tidak disebut tidak ikut berubah. 0 sah — itu "pause antrian ini".
+     */
+    public function test_jumlah_worker_disimpan_dan_dijepit(): void
+    {
+        $this->postJson(route('pipeline.workers', 'ai'), ['jumlah' => 4])->assertOk();
+        $this->postJson(route('pipeline.workers', 'ig'), ['jumlah' => 0])->assertOk();
+        $this->postJson(route('pipeline.workers', 'db'), ['jumlah' => 99])->assertOk();
+
+        $this->assertSame(
+            ['ig' => 0, 'ai' => 4, 'db' => QueueWork::MAX_WORKERS],
+            QueueWork::jumlah(),
+        );
+
+        $this->postJson(route('pipeline.workers', 'redis'), ['jumlah' => 2])->assertNotFound();
+    }
+
     /** Satu baris failed_jobs dengan payload yang bisa dibaca ulang framework. */
     private function gagal(string $queue, string $mediaId): void
     {

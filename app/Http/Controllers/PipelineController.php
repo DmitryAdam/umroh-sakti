@@ -7,6 +7,7 @@ use App\Models\Package;
 use App\Models\SourceAccount;
 use App\Support\PipelineLog;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -98,6 +99,27 @@ class PipelineController extends Controller
         return response()->json($this->numbers());
     }
 
+    /**
+     * Jumlah worker paralel untuk satu antrian. Yang ditulis cuma setelannya (cache,
+     * sama seperti flag STOP); loop induk `QueueWork` yang menambah/mengurangi anak
+     * sekali per detik, jadi worker tidak perlu di-restart.
+     *
+     * 0 = antriannya dipause: jobnya tetap antri, cuma tidak ada yang mengambil.
+     * Batas atasnya `MAX_WORKERS` — yang jebol duluan bukan CPU-nya: `ig` paralel kena
+     * rate limit Graph #4, `ai` paralel bikin call vision saling menggantung di router,
+     * dan `db` itu SQLite yang cuma boleh satu penulis.
+     */
+    public function workers(Request $request, string $queue): JsonResponse
+    {
+        abort_unless(in_array($queue, self::QUEUES, true), 404);
+
+        $jumlah = max(0, min(QueueWork::MAX_WORKERS, (int) $request->input('jumlah')));
+        Cache::forever(QueueWork::WORKERS, [...QueueWork::jumlah(), $queue => $jumlah]);
+        PipelineLog::write('run', "== worker $queue diatur jadi $jumlah");
+
+        return response()->json($this->numbers());
+    }
+
     public function status(): JsonResponse
     {
         return response()->json($this->numbers());
@@ -155,6 +177,7 @@ class PipelineController extends Controller
             ->groupBy('status')->pluck('total', 'status');
 
         $sekarang = PipelineLog::current();
+        $worker = QueueWork::jumlah();
 
         return [
             // Baris terakhir per antrian: ig sedang fetch siapa, ai sedang mengekstrak
@@ -194,13 +217,18 @@ class PipelineController extends Controller
             'jalan' => $antrian > 0,
 
             // Satu blok per antrian: yang dipakai panel buat kartu + tombol batalnya.
+            // `worker` itu SETELAN (berapa yang dimau), bukan berapa proses yang benar-benar
+            // hidup — induknya menyusul dalam ≤1 detik, dan tanpa `queue:work` jalan
+            // angka itu cuma niat.
             'antrian_per' => collect(self::QUEUES)->mapWithKeys(fn ($q) => [$q => [
                 'antri' => (int) ($antrianPer[$q]->antri ?? 0),
                 'proses' => (int) ($antrianPer[$q]->jalan ?? 0),
                 'gagal' => (int) ($gagalPer[$q] ?? 0),
                 'pesan_gagal' => $pesanGagal[$q] ?? null,
                 'sekarang' => $sekarang[$q] ?? null,
+                'worker' => $worker[$q],
             ]]),
+            'max_worker' => QueueWork::MAX_WORKERS,
         ];
     }
 }

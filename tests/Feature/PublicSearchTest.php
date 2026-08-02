@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Package;
+use App\Models\SourceAccount;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
@@ -109,7 +111,7 @@ class PublicSearchTest extends TestCase
 
         $this->assertSame(1, Package::count());
         $this->assertFileExists("$raw/post.json", 'flyer slide lain ikut hilang');
-        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('excluded_posts')
+        $this->assertSame(0, DB::table('excluded_posts')
             ->where('media_id', 'carousel1')->count(),
             'post yang masih punya paket lain tidak boleh dikecualikan');
 
@@ -140,11 +142,11 @@ class PublicSearchTest extends TestCase
 
         $this->actingAsOperator();
 
-        \Illuminate\Support\Facades\DB::table('jobs')->insert([
+        DB::table('jobs')->insert([
             ['queue' => 'ig', 'payload' => '{}', 'attempts' => 0, 'available_at' => time(), 'created_at' => time()],
             ['queue' => 'ai', 'payload' => '{}', 'attempts' => 0, 'available_at' => time(), 'created_at' => time()],
         ]);
-        \Illuminate\Support\Facades\DB::table('failed_jobs')->insert([
+        DB::table('failed_jobs')->insert([
             ['uuid' => 'u1', 'connection' => 'database', 'queue' => 'ig', 'payload' => '{}',
                 'exception' => 'x', 'failed_at' => now()],
         ]);
@@ -154,14 +156,14 @@ class PublicSearchTest extends TestCase
             ->assertOk()
             ->assertJson(['antri_ig' => 0, 'antri_ai' => 1, 'gagal' => 0]);
 
-        $this->assertSame(['ai'], \Illuminate\Support\Facades\DB::table('jobs')->pluck('queue')->all());
+        $this->assertSame(['ai'], DB::table('jobs')->pluck('queue')->all());
 
         $this->deleteJson('/pipeline/queue')
             ->assertOk()
             ->assertJson(['antrian' => 0, 'gagal' => 0, 'jalan' => false]);
 
-        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('jobs')->count());
-        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('failed_jobs')->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(0, DB::table('failed_jobs')->count());
 
         // Nama antrian asing tidak boleh jadi "hapus semua".
         $this->deleteJson('/pipeline/queue/default')->assertNotFound();
@@ -172,7 +174,7 @@ class PublicSearchTest extends TestCase
     {
         $this->actingAsOperator();
 
-        \Illuminate\Support\Facades\DB::table('jobs')->insert([
+        DB::table('jobs')->insert([
             ['queue' => 'ai', 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null,
                 'available_at' => time(), 'created_at' => time()],
             ['queue' => 'ai', 'payload' => '{}', 'attempts' => 1, 'reserved_at' => time(),
@@ -201,7 +203,7 @@ class PublicSearchTest extends TestCase
         $this->package(['status' => 'draft', 'media_id' => 'c']);
         $this->package(['status' => 'published', 'media_id' => 'd']);
 
-        \Illuminate\Support\Facades\DB::table('excluded_posts')->insert([
+        DB::table('excluded_posts')->insert([
             ['media_id' => 'x1', 'reason' => 'bukan_paket', 'created_at' => now(), 'updated_at' => now()],
             ['media_id' => 'x2', 'reason' => 'bukan_paket', 'created_at' => now(), 'updated_at' => now()],
             ['media_id' => 'x3', 'reason' => 'sebelum_ambang', 'created_at' => now(), 'updated_at' => now()],
@@ -415,6 +417,21 @@ class PublicSearchTest extends TestCase
         $this->get('/?q=fulan')->assertOk()
             ->assertSee(route('package.show', $panjang), false)
             ->assertDontSee(route('package.show', $pendek), false);
+    }
+
+    /** Nama travel = akun IG-nya: username di kolom paket, nama tampilan di source_accounts. */
+    public function test_cari_bebas_menyapu_username_dan_nama_travel(): void
+    {
+        SourceAccount::create(['username' => 'sunnatravel.id', 'full_name' => 'Sunna Wisata Hati',
+            'status' => 'approved']);
+        $milikTravel = $this->package(['source_account' => 'sunnatravel.id']);
+        $lain = $this->package(['source_account' => 'umitourtravel_id']);
+
+        foreach (['sunnatravel', 'wisata hati'] as $cari) {
+            $this->get('/?q='.urlencode($cari))->assertOk()
+                ->assertSee(route('package.show', $milikTravel), false)
+                ->assertDontSee(route('package.show', $lain), false);
+        }
     }
 
     /**

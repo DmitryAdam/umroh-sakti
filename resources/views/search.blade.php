@@ -41,7 +41,7 @@
     <div class="flex flex-wrap items-center gap-2">
         <label class="flex h-10 w-full min-w-0 flex-1 items-center gap-2 rounded-xl border border-input bg-background px-3 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 sm:w-auto">
             <x-ui.icon name="search" class="!size-4 text-muted-foreground" />
-            <input name="q" value="{{ request('q') }}" placeholder="hotel, pembimbing, kota, maskapai…"
+            <input name="q" value="{{ request('q') }}" placeholder="hotel, travel, pembimbing, kota, maskapai…"
                    class="h-full w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground">
         </label>
 

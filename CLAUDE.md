@@ -645,7 +645,7 @@ jadi `database is locked` datang dalam 2 ms padahal timeout-nya 10 detik.
 | antrian | worker | job | kenapa |
 |---|---|---|---|
 | `ig` | 1 | `FetchAccount` | rate limit Graph API tingkat app, paralel = kena `#4` |
-| `ai` | 1 (`--ai=N`) | `ExtractPost` | bagian paling lama, tapi call vision paralel ke router saling menggantung — serial dulu |
+| `ai` | 1 (`--ai=N` / input di `/pipeline`) | `ExtractPost` | bagian paling lama, tapi call vision paralel ke router saling menggantung — serial dulu |
 | `db` | 1 | `ExtractPending`, `ImportPackages` | cepat, dan SQLite satu penulis |
 
 Akun baru yang masuk ke `ig` tidak menghentikan konversi di `ai`; fetch yang kena
@@ -934,6 +934,52 @@ situ jejaknya wajib dilipat `<details>` supaya daftar akunnya masih kelihatan; d
 jejaknya dirender terbuka terus (`max-h-[60vh]`, tanpa `<details>`). Menunya jadi dua
 entri (`akun`, `pipeline`), dan `/accounts` menyisakan satu tautan ke sana.
 
+**Panelnya tiga kartu, satu per antrian — corong dan kartu antrian TIDAK dipisah lagi.**
+Dulu 7 kotak corong di atas + 3 kartu antrian di bawah, dan itu memaksa membaca dua
+tempat untuk satu tahap: "nunggu ai 507" duduk jauh dari "ai 5636 job antri", dan
+angkanya juga tidak sepadan (507 post vs 5636 job, satuan beda). Sekarang tiap kartu
+memuat tahapnya sekaligus antriannya: angka besar + bar, sisa antri/jalan/gagal,
+tombol ulangi/batal, baris "sekarang", dan jumlah workernya.
+
+Dua kotak yang paling sering ditanya sengaja dibuang bentuk lamanya:
+`dibaca ai 2455 / 489 hasil` mencampur satuan post dengan satuan file ekstraksi —
+`hasil_ekstraksi` sekarang jadi baris di kartu **db** ("belum diimpor"), tempatnya
+memang di situ karena import yang menghabiskannya. Dan `jadi paket 734` + `published
+590` menghitung baris yang sama dua kali; sekarang satu kotak `590/734 paket tampil
+publik`, sisanya (`review`, `draft`) jadi subbarisnya.
+
+Barnya juga bukan lagi "sisa antrian dari puncak sesi ini" — angka yang mulai lagi
+dari 0 tiap reload dan tidak berarti apa pun di halaman yang baru dibuka. Sekarang
+corong beneran: `terfetch/akun`, `post_dibaca/post_diunduh`, `published/paket`.
+
+**Jumlah worker paralel diatur dari panel, per antrian** (input angka di tiap kartu →
+`POST /pipeline/workers/{queue}`, `PipelineController::workers`). Yang ditulis cuma
+setelan di cache (`QueueWork::WORKERS`, `Cache::forever`) — jalur yang sama dengan flag
+stop, karena `config` tidak bisa diubah dari UI. Loop induk `queue:work` membacanya
+sekali per detik lalu **merekonsiliasi**: kurang → spawn, lebih → SIGTERM yang nomornya
+di atas jatah (job yang dipegang tetap selesai). Tidak ada restart worker.
+
+`0` sah dan artinya **antrian itu dipause**: jobnya tetap antri, cuma tidak ada yang
+mengambil. Karena itu induknya tidak lagi keluar saat kehabisan anak — kalau ikut
+keluar, menaikkannya lagi cuma bisa dari terminal. Batas atas `MAX_WORKERS` = 8, dan
+yang jebol duluan bukan CPU-nya: `ig` paralel kena Graph `#4`, `ai` paralel bikin call
+vision saling menggantung di router, `db` itu SQLite satu penulis. Naikkan `ig`/`db`
+cuma kalau memang sedang menguji batas itu.
+
+Nama anak sekarang **selalu** berakhiran nomor (`ig1`, `ai2`) — antriannya dibaca balik
+dari namanya (`rtrim` digit), jadi tidak ada peta kedua yang basi tiap jumlahnya diubah.
+Konsekuensinya baris stdout worker masuk `pipeline.jsonl` sebagai `ig1`, bukan `ig`;
+`PipelineLog::current()['ig']` karena itu cuma memuat baris yang ditulis job-nya.
+`--ai=N` masih ada tapi cuma menulis setelan yang sama, dan **cuma kalau memang diketik**
+(`hasParameterOption`) — kalau tidak, tiap start biasa akan menimpa angka yang barusan
+diatur dari panel.
+
+**Polling tidak boleh menimpa DOM yang sedang disentuh.** `setHtml()` melewati penulisan
+kalau HTML-nya sama persis (kasus idle, paling sering) **atau** ada seleksi/fokus di
+dalam elemen itu. Tanpa itu `innerHTML` ditulis ulang tiap 2 detik: teks yang disorot
+lepas sebelum sempat di-copy (keluhan aslinya: "halaman ini susah dicopy, kerefresh
+mulu") dan angka worker yang sedang diketik kereset.
+
 Daftar akun sumber di `/accounts`: masukin username/URL/@handle
 satu per baris (parsernya `SourceAccount::usernameOf()`, dipakai juga oleh
 `packages:crawl`), lihat status + `last_fetched_at` + jumlah post/paket/dikecualikan per akun,
@@ -1018,9 +1064,9 @@ Job yang **sedang** dikerjakan tetap selesai — barisnya masih ada di `jobs` de
 `reserved_at` terisi, dihapus lebih awal saja, dan `delete()` worker sesudahnya jadi
 no-op. Makanya `antrian_per.{q}` memisah `antri` (`reserved_at is null`) dari `proses`:
 "3 antri" yang sebenarnya "2 antri + 1 jalan" bikin panel kelihatan macet padahal
-tidak. Bar progress per antrian dihitung **di browser** dari puncak antrian yang pernah
-terlihat sejak halaman dibuka (job selesai tidak meninggalkan jejak yang bisa dihitung),
-jadi reload = bar mulai lagi dari 0%.
+tidak. `antrian_per.{q}.worker` itu **setelan** jumlah worker, bukan berapa proses yang
+benar-benar hidup: induknya menyusul dalam ≤1 detik, dan tanpa `queue:work` jalan angka
+itu cuma niat.
 
 **Profil akun ikut diambil saat fetch, tapi cuma yang memang ada di API.**
 `business_discovery` menyediakan `name`, `followers_count`, `follows_count`,

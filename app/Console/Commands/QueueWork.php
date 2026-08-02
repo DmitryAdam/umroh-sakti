@@ -32,6 +32,34 @@ use Symfony\Component\Console\Input\InputOption;
  */
 class QueueWork extends WorkCommand
 {
+    /**
+     * Jumlah worker per antrian, bisa diubah sambil jalan dari /pipeline. Nilainya
+     * di cache seperti flag STOP — satu map kecil, dan `config` tidak bisa diubah
+     * dari UI. Loop induk membacanya sekali per detik lalu menambah/mengurangi anak;
+     * yang dikurangi kena SIGTERM, jadi job yang dipegang tetap selesai.
+     *
+     * `cache:clear` mengembalikannya ke 1 per antrian, dan itu default yang aman.
+     */
+    public const WORKERS = 'worker-jumlah';
+
+    /** Batas atas per antrian. Di atas ini yang jebol bukan CPU-nya: Graph #4 dan router. */
+    public const MAX_WORKERS = 8;
+
+    /**
+     * Setelan sekarang, sudah dijepit 0..MAX_WORKERS. 0 = antriannya sengaja
+     * dipause (jobnya tetap antri, cuma tidak ada yang mengambil).
+     *
+     * @return array<string, int>
+     */
+    public static function jumlah(): array
+    {
+        $mau = Cache::get(self::WORKERS, []);
+
+        return collect(['ig', 'ai', 'db'])
+            ->mapWithKeys(fn ($q) => [$q => max(0, min(self::MAX_WORKERS, (int) ($mau[$q] ?? 1)))])
+            ->all();
+    }
+
     protected $description = 'Jalankan worker semua antrian pipeline sekaligus (ig + ai + db)';
 
     /**
@@ -101,8 +129,12 @@ class QueueWork extends WorkCommand
             PipelineLog::write('run', "$yatim job reservasi yatim dilepas");
         }
 
-        $ai = max(1, (int) $this->option('ai'));
-        $workers = ['ig' => 1, 'ai' => $ai, 'db' => 1];
+        // --ai=N tetap ada, tapi sekarang cuma cara lain menulis setelan yang sama —
+        // dan cuma kalau memang diketik, supaya start biasa tidak menimpa angka yang
+        // barusan diatur dari panel.
+        if ($this->input->hasParameterOption('--ai')) {
+            Cache::forever(self::WORKERS, [...self::jumlah(), 'ai' => max(1, (int) $this->option('ai'))]);
+        }
 
         // Flag yang menentukan kapan worker berhenti wajib diteruskan ke anak —
         // kalau tidak, `queue:work --stop-when-empty` menggantung selamanya.
@@ -111,26 +143,30 @@ class QueueWork extends WorkCommand
             $this->option('stop-when-empty') ? '--stop-when-empty' : null,
         ]));
 
-        $this->info("Worker jalan: ig×1 · ai×$ai · db×1. Ctrl+C untuk berhenti.");
-        PipelineLog::write('run', "worker start: ig×1 ai×$ai db×1");
-
-        // Nama anak -> antriannya. Nama dipakai ulang saat menyalakan ulang supaya
-        // baris log tetap bisa dilacak ke worker yang sama.
-        $anak = [];
-        foreach ($workers as $queue => $jumlah) {
-            for ($i = 1; $i <= $jumlah; $i++) {
-                $anak[$jumlah > 1 ? "$queue$i" : $queue] = $queue;
-            }
-        }
+        // Kurung kurawal wajib: `×` itu byte ≥0x80, jadi "$q×$n" diparse PHP sebagai
+        // variabel bernama `$q×` — bukan `$q` diikuti tanda kali.
+        $rangkum = fn (array $m) => collect($m)->map(fn ($n, $q) => "{$q}×{$n}")->implode(' · ');
+        $this->info('Worker jalan: '.$rangkum(self::jumlah()).'. Ctrl+C untuk berhenti.');
+        PipelineLog::write('run', 'worker start: '.$rangkum(self::jumlah()));
 
         // Flag sisa dari sesi sebelumnya dibuang di sini, bukan dibiarkan kedaluwarsa:
         // kalau tidak, tombol stop yang ditekan saat tidak ada worker akan mematikan
         // worker berikutnya yang start.
         Cache::forget(self::STOP);
 
+        // Nama anak selalu berakhiran nomor (`ig1`, `ai2`) — antriannya dibaca balik
+        // dari namanya, jadi tidak perlu peta kedua yang bisa basi tiap jumlahnya
+        // diubah. Nomornya juga yang menentukan siapa yang dimatikan saat diturunkan.
         $jalan = [];
-        foreach ($anak as $nama => $queue) {
-            $jalan[$nama] = $this->spawn($nama, $queue, $berhenti);
+        $mati = [];   // anak yang sengaja di-SIGTERM: jangan dinyalakan lagi
+
+        // Rombongan awal dispawn di sini, bukan diserahkan ke rekonsiliasi di loop:
+        // rekonsiliasinya dilewat kalau ada --once/--stop-when-empty, dan tanpa baris
+        // ini perintah itu keluar seketika tanpa pernah punya anak.
+        foreach (self::jumlah() as $queue => $mau) {
+            for ($i = 1; $i <= $mau; $i++) {
+                $jalan["$queue$i"] = $this->spawn("$queue$i", $queue, $berhenti);
+            }
         }
 
         // Detak pemindai. `ExtractPending` sebelumnya cuma dilempar oleh FetchAccount
@@ -164,11 +200,33 @@ class QueueWork extends WorkCommand
         $stop = false;
         $cek = 0;
 
-        while ($jalan !== []) {
+        // Induk tetap hidup walau tidak punya anak: jumlah 0 itu "antriannya dipause",
+        // bukan "matikan pipeline" — kalau induknya ikut keluar, menaikkannya lagi cuma
+        // bisa dari terminal. Yang benar-benar mengakhiri: tombol stop atau --once.
+        while ($jalan !== [] || (! $stop && $berhenti === [])) {
             // Sekali per detik, bukan tiap putaran: loopnya 200 ms dan cache-nya di
             // SQLite yang sama dengan antrian.
             if (! $stop && time() > $cek) {
                 $cek = time();
+
+                // Rekonsiliasi jumlah worker: kurang -> spawn, lebih -> SIGTERM yang
+                // nomornya di atas jatah. SIGTERM, bukan kill, jadi job yang sedang
+                // dipegang tetap selesai (satu carousel ke vision bisa menit-menitan)
+                // dan panelnya memang tidak langsung sunyi.
+                if ($berhenti === []) {
+                    foreach (self::jumlah() as $queue => $mau) {
+                        for ($i = 1; $i <= $mau; $i++) {
+                            $jalan["$queue$i"] ??= $this->spawn("$queue$i", $queue, $berhenti);
+                        }
+                        for ($i = $mau + 1; $i <= self::MAX_WORKERS; $i++) {
+                            if (isset($jalan["$queue$i"]) && ! isset($mati["$queue$i"])) {
+                                $jalan["$queue$i"]->signal(SIGTERM);
+                                $mati["$queue$i"] = true;
+                                PipelineLog::write('run', "worker $queue$i dihentikan (jumlah $queue diturunkan jadi $mau)");
+                            }
+                        }
+                    }
+                }
 
                 if (Cache::pull(self::STOP, false)) {
                     $stop = true;
@@ -193,10 +251,11 @@ class QueueWork extends WorkCommand
                     continue;
                 }
 
-                // --once / --stop-when-empty: anak memang disuruh berhenti, jangan
-                // dihidupkan lagi — kalau tidak, perintahnya tidak pernah selesai.
-                if ($stop || $berhenti !== []) {
-                    unset($jalan[$nama]);
+                // --once / --stop-when-empty / stop / jumlahnya diturunkan: anak memang
+                // disuruh berhenti, jangan dihidupkan lagi — kalau tidak, perintahnya
+                // tidak pernah selesai dan angka yang diturunkan naik lagi sendiri.
+                if ($stop || $berhenti !== [] || isset($mati[$nama])) {
+                    unset($jalan[$nama], $mati[$nama]);
 
                     continue;
                 }
@@ -209,7 +268,7 @@ class QueueWork extends WorkCommand
                 // barusan false), jadi ini cuma cara mengambil ProcessResult-nya —
                 // InvokedProcess sendiri tidak punya exitCode().
                 PipelineLog::write('run', "worker $nama keluar (exit {$proses->wait()->exitCode()}), nyalakan lagi");
-                $jalan[$nama] = $this->spawn($nama, $anak[$nama], $berhenti);
+                $jalan[$nama] = $this->spawn($nama, rtrim($nama, '0123456789'), $berhenti);
             }
 
             usleep(200_000);
