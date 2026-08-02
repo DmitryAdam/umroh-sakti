@@ -469,20 +469,47 @@ gambar di flyer) tetap tidak lolos gerbang untuk gambar yang tidak memuatnya.
 
 Semua panggilan model lewat **9router** (`AI_API_URL`, OpenAI-compatible): satu URL
 + satu `AI_API_KEY`, yang beda cuma `EXTRACT_MODEL` (penyusun) dan `VISION_MODEL`
-(mata). Nama model wajib berprefix provider — nama polos diarahkan ke `openai`.
-Keduanya boleh berisi **daftar JSON berkutip** (`'["ds/x","openrouter/y"]'`):
-`llmPostAny()` memakainya bergiliran (round-robin, kuota free tier kebagi) dan
-melewati model yang galat ke berikutnya; kalau semuanya mati galat terakhir dilempar.
-**Daftar itu wajib berisi lebih dari satu model — routernya menggantung, bukan
-menolak.** Terukur 2026-07-31 atas satu post 12 slide: `deepseek-flash` dan
-`ds/deepseek-v4-flash` menjawab 0 byte selama 60 detik di sekitar separuh call
-(lalu 21–51 detik saat berhasil), sementara `gemini/gemini-3.5-flash-lite`
-menjawab 2,5–4,2 detik. Dengan satu model saja, dua timeout `llmPost()` =
-exception = seluruh postnya hilang; dengan tiga, post yang sama menulis 11 hasil.
-Kandidat yang sudah diuji benar-benar melihat pixel (bukan HTTP 200 kosong):
-`gemini/gemini-3.6-flash` dan `gc/gemini-3.1-flash-lite-preview`. Yang tidak
-bisa: `gc/gemini-3-flash-preview` (404) dan seluruh provider `llm7` + `nvidia/`
-("No active credentials" / gantung 90 detik).
+(mata).
+
+**Isinya nama combo, bukan nama model: `logic-model` (penyusun) dan `image-model`
+(mata).** Nama modelnya sendiri dirakit di dashboard router, jadi ganti/tambah model
+= ubah anggota combo, bukan ubah `.env` di tiap mesin — dan giliran + failover-nya
+dikerjakan router, bukan `llmPostAny()`. Nama yang bicara peran juga menghindari
+ambiguitas yang sudah kejadian: `.env` tertulis `gemini-flash`, yang menjawab
+`GLM-4.6V-Flash`, dan tidak ada satu pun baris log yang kelihatan salah.
+
+Kalau menyebut model langsung, dua aturan lama tetap berlaku: namanya wajib berprefix
+provider (nama polos diarahkan ke `openai`), dan isinya wajib **daftar JSON berkutip**
+berisi lebih dari satu model (`'["ds/x","openrouter/y"]'`) — `llmPostAny()` memakainya
+bergiliran dan melewati yang galat, tapi **routernya menggantung, bukan menolak**.
+Terukur 2026-07-31 atas satu post 12 slide: `deepseek-flash` dan `ds/deepseek-v4-flash`
+menjawab 0 byte selama 60 detik di sekitar separuh call (lalu 21–51 detik saat
+berhasil). Dengan satu model, dua timeout `llmPost()` = exception = seluruh postnya
+hilang; dengan tiga, post yang sama menulis 11 hasil. Peringatan `selftest` karena itu
+cuma menyala untuk nama ber-`/`; nama combo dilewat.
+
+**Semua anggota combo `image-model` wajib bisa vision, dan itu tidak bisa
+diasumsikan.** Terukur 2026-08-02 dengan flyer 222 KB base64 yang jawabannya sudah
+diketahui: `glm-cn/GLM-4.6V-Flash`, `glm-cn/GLM-4.6V-FlashX`, `glm-cn/GLM-4.7-Flash`
+sama-sama balas `prompt_tokens` **830** — gambarnya dibuang router sebelum sampai ke
+model, walau nama modelnya jelas-jelas varian vision (`V`) yang di Zhipu memang
+multimodal. Satu anggota buta di combo = tiap request jadi lotere, dan yang kena slot
+itu balas **HTTP 200 dengan `slides` kosong**: bukan galat, jadi `llmPostAny()` tidak
+pindah model dan postnya hilang senyap (lihat "balasan vision yang tidak terbaca
+bukan vonis"). Menguji anggota barunya: kirim flyer yang jawabannya sudah diketahui,
+lalu **baca `prompt_tokens`** — satu flyer 1080×1350 itu ribuan token, angka ratusan
+berarti yang sampai cuma teksnya.
+
+Kalau butuh cadangan di luar router: `glm-4.6v-flash` (gratis) dan `glm-4.6v-flashx`
+lewat endpoint Z.ai langsung (`https://api.z.ai/api/paas/v4/chat/completions`, key
+sendiri) benar-benar melihat pixel — `prompt_tokens` 1910 untuk flyer yang sama.
+Terukur 2026-08-02 atas 8 flyer yang harga/tanggal/durasinya sudah ada di DB,
+`TRANSCRIBE_PROMPT` apa adanya: **`glm-4.6v-flashx` 8/8 lolos gerbang dan ketiga
+angkanya benar semua, nol galat, rata 15,7 detik**. Yang dipakai `flashx`, bukan
+`flash`: yang gratis kena `1302 Rate limit` / `1305 overloaded` beruntun — 2 dari 8
+gagal total, rata 104,6 detik. Itu **URL kedua**, jadi bukan cuma ganti
+`VISION_MODEL`: `llmPost()` sudah menerima url+key sebagai parameter, tapi
+`lihatFlyer()` masih memanggil `routerUrl()`.
 
 **Satu slide yang gagal jangan menjatuhkan slide lain.** Panggilan penyusun per
 slide dibungkus try/catch di `cmdExtract()`. Tanpa itu exception di slide ke-3

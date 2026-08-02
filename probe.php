@@ -1166,11 +1166,13 @@ function cmdExtract(array $argv): void
     // --no-gate: gerbang vision dilewati. Buat tombol "baca ulang AI" di halaman post —
     // operator sudah melihat flyernya sendiri dan menilai vonis vision salah.
     $noGate = in_array('--no-gate', $argv, true);
-    $models = envList(env('EXTRACT_MODEL'), 'ds/deepseek-v4-flash');
+    $models = envList(env('EXTRACT_MODEL'), 'logic-model');
     // Daftar satu model = tidak ada tempat pindah saat routernya menggantung, dan
     // llmPost cuma mengulang ke pintu yang sama: dua timeout = postnya hilang.
-    count($models) < 2 && out('  ! EXTRACT_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
-    count(envList(env('VISION_MODEL'), 'x')) < 2 && out('  ! VISION_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
+    // Nama combo (tanpa prefix provider) dikecualikan: gilirannya di router.
+    $sendirian = fn (array $l) => count($l) < 2 && str_contains($l[0] ?? '', '/');
+    $sendirian($models) && out('  ! EXTRACT_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
+    $sendirian(envList(env('VISION_MODEL'), 'image-model')) && out('  ! VISION_MODEL cuma 1 model — satu router yang menggantung membuang seluruh post');
 
     @mkdir(EXT_DIR, 0775, true);
 
@@ -1718,7 +1720,7 @@ function lihatFlyer(array $images, string $caption, int $offset = 0): array
     }
     $content[] = ['type' => 'text', 'text' => TRANSCRIBE_PROMPT];
 
-    $models = envList(env('VISION_MODEL'), 'gemini/gemini-3.1-flash-lite-preview');
+    $models = envList(env('VISION_MODEL'), 'image-model');
     out(sprintf(
         '  POST %s model=%s (%d gambar%s, %.1f KB base64) -> transkrip',
         parse_url(routerUrl(), PHP_URL_HOST),
