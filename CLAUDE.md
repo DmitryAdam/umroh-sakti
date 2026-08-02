@@ -645,7 +645,7 @@ jadi `database is locked` datang dalam 2 ms padahal timeout-nya 10 detik.
 | antrian | worker | job | kenapa |
 |---|---|---|---|
 | `ig` | 1 | `FetchAccount` | rate limit Graph API tingkat app, paralel = kena `#4` |
-| `ai` | N (`--ai=3`) | `ExtractPost` | bagian paling lama, ini yang dibikin paralel |
+| `ai` | 1 (`--ai=N`) | `ExtractPost` | bagian paling lama, tapi call vision paralel ke router saling menggantung — serial dulu |
 | `db` | 1 | `ExtractPending`, `ImportPackages` | cepat, dan SQLite satu penulis |
 
 Akun baru yang masuk ke `ig` tidak menghentikan konversi di `ai`; fetch yang kena

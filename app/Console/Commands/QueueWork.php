@@ -26,7 +26,8 @@ use Symfony\Component\Console\Input\InputOption;
  * Tiga antrian karena tiga batasan yang berbeda:
  *
  *   ig  1 worker  — rate limit Graph API tingkat app, paralel cuma bikin kena #4
- *   ai  N worker  — bagian paling lama; ini yang dibikin paralel
+ *   ai  1 worker  — default 1: call vision paralel ke router malah saling
+ *                   menggantung. Naikkan lewat --ai=N kalau routernya sanggup.
  *   db  1 worker  — pemindai + import, cepat, dan SQLite cuma boleh satu penulis
  */
 class QueueWork extends WorkCommand
@@ -58,7 +59,7 @@ class QueueWork extends WorkCommand
         parent::configure();
 
         $this->getDefinition()->addOption(new InputOption(
-            'ai', null, InputOption::VALUE_REQUIRED, 'Jumlah worker ekstraksi paralel', '3',
+            'ai', null, InputOption::VALUE_REQUIRED, 'Jumlah worker ekstraksi paralel', '1',
         ));
     }
 
