@@ -96,6 +96,9 @@ Route::middleware(['auth', 'can:admin'])->group(function () {
     // Aksi kelompok per post yang dicentang: `extract` (baca ulang) / `block`
     // (vonis manusia "bukan paket", baru di sini filenya dibuang) / `unblock`.
     Route::post('/posts/bulk', [PostController::class, 'bulk'])->name('posts.bulk');
+    // Saklar auto-approve usulan (tab usulan). Admin saja: ini menentukan nasib
+    // kiriman semua orang, bukan setelan tampilan yang boleh per-browser.
+    Route::post('/posts/auto-approve', [PostController::class, 'autoApprove'])->name('posts.auto-approve');
     // Baca ulang satu post: buang blok `excluded_posts`, hapus jejak bacaan lama,
     // lalu extract (ditolak kalau rawnya sudah dihapus).
     Route::post('/posts/{media}/extract', [PostController::class, 'reextract'])

@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Validation\ValidationException;
@@ -38,6 +39,17 @@ class PostController extends Controller
     private const PER_HALAMAN = 60;
 
     private const FILTERS = ['packages', 'rejected', 'pending', 'suggestions'];
+
+    /**
+     * Saklar "usulan baru langsung disetujui & dibaca AI", tab usulan di /posts.
+     *
+     * Disimpan di tabel `cache` (driver `database`) — satu boolean tidak layak tabel
+     * sendiri, dan tabelnya sudah ada. Konsekuensinya `cache:clear` mematikannya,
+     * dan itu default yang aman: mati = usulan menunggu approval seperti biasa.
+     *
+     * ponytail: tabel `settings` kalau kelak ada setelan kedua.
+     */
+    private const AUTO_APPROVE = 'posts.auto_approve';
 
     public function index(Request $request, ?SourceAccount $account = null): View
     {
@@ -65,12 +77,26 @@ class PostController extends Controller
             // ke halaman per-akunnya, dan tanpa peta ini itu satu query per baris.
             'akunId' => $account ? [] : SourceAccount::pluck('id', 'username')->all(),
             'f' => $f,
+            'autoApprove' => (bool) Cache::get(self::AUTO_APPROVE, false),
             // Angka per tab dari saringan yang sama dengan yang menyaring tabelnya —
             // dua definisi berarti tab yang menyebut 3 lalu menampilkan 5.
             'jumlah' => [null => $posts->count()] + collect(self::FILTERS)
                 ->mapWithKeys(fn ($key) => [$key => $posts->filter(self::saring($key))->count()])
                 ->all(),
         ]);
+    }
+
+    /**
+     * Saklar auto-approve, tombolnya di tab usulan. Admin saja (route `can:admin`) —
+     * ini mengubah nasib kiriman semua orang, bukan setelan tampilan.
+     */
+    public function autoApprove(Request $request): RedirectResponse
+    {
+        Cache::forever(self::AUTO_APPROVE, $on = $request->boolean('on'));
+
+        return back()->with('status', $on
+            ? 'Auto-approve nyala: usulan baru langsung disetujui dan dibaca AI.'
+            : 'Auto-approve mati: usulan baru menunggu disetujui lagi.');
     }
 
     /**
@@ -334,6 +360,22 @@ class PostController extends Controller
             '_suggested_by' => $request->user()->email,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
+        // Auto-approve: jalurnya persis tombol "setujui & baca" di /posts, bukan
+        // cabang kedua di sini — `bacaUlang()` yang membuang `_suggested_by`,
+        // menaikkan akunnya jadi `approved`, dan melempar ExtractPost. Jadi
+        // saklarnya tidak bisa diam-diam berperilaku beda dari tombolnya.
+        //
+        // Gerbang vision & `belumLengkap()` tetap berlaku: yang dilewati cuma
+        // approval manusia, bukan satu pun saringan.
+        if (Cache::get(self::AUTO_APPROVE, false)) {
+            $this->bacaUlang($media);
+
+            return redirect()->route('suggestions')->with('status', sprintf(
+                'Usulan post @%s (%d gambar) tersimpan dan langsung dibaca AI (auto-approve nyala).',
+                $user, count($names),
+            ));
+        }
+
         // Pesannya sengaja tanpa media_id, nama antrian, dan perintah artisan:
         // yang mengirim perlu tahu kirimannya masuk dan apa langkah berikutnya,
         // bukan nama komponen yang mengerjakannya. Jejak teknisnya sudah ada di
@@ -408,17 +450,35 @@ class PostController extends Controller
     }
 
     /**
-     * Gambar mentah satu slide, buat melihat apa yang terunduh dan kenapa ditolak.
+     * Gambar satu slide, buat melihat apa yang terunduh dan kenapa ditolak.
      *
-     * ponytail: dilayani apa adanya tanpa thumbnail — alat kerja operator, bukan
-     * halaman publik; pasang cache seperti FlyerThumbController kalau jadi berat.
+     * Yang keluar thumbnail (lebar maks 480, q75) yang di-cache di
+     * `storage/app/thumbs`, bukan jpg raw ~500 KB: 60 baris x petak 40x40 dulu
+     * berarti puluhan MB per halaman. Aturannya sama dengan FlyerThumbController;
+     * prefiks `raw-` supaya tidak tabrakan dengan cache flyer yang media+index-nya
+     * bisa sama.
      */
     public function raw(string $media, string $index): BinaryFileResponse
     {
         $files = glob(storage_path("raw/*/$media/$index.jpg")) ?: [];
         abort_if($files === [], 404);
 
-        return response()->file($files[0]);
+        $cache = storage_path("app/thumbs/raw-$media-$index.jpg");
+        if (! is_file($cache) || filemtime($cache) < filemtime($files[0])) {
+            File::ensureDirectoryExists(dirname($cache));
+            $image = @imagecreatefromjpeg($files[0]);
+            abort_unless($image !== false, 404);
+            if (imagesx($image) > 480) {
+                $image = imagescale($image, 480);
+            }
+            imagejpeg($image, $cache, 75);
+            imagedestroy($image);
+        }
+
+        return response()->file($cache, [
+            'Content-Type' => 'image/jpeg',
+            'Cache-Control' => 'private, max-age=86400',
+        ]);
     }
 
     /**

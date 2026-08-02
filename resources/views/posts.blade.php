@@ -53,7 +53,36 @@
             {{ $label }} <span class="tabular-nums opacity-70">{{ $jumlah[$key] }}</span>
         </a>
     @endforeach
+    {{-- Gambar mati secara default: 60 baris x thumbnail tetap puluhan request, dan
+         yang dibaca operator itu caption + alasan. Pilihannya preferensi (localStorage),
+         bukan query string — link yang dibagikan tidak boleh memaksa tata letak orang
+         lain, aturan yang sama dengan kartu/daftar di `/`. --}}
+    <label class="ml-auto flex cursor-pointer items-center gap-1 text-stone-500"
+           title="thumbnail baru diunduh kalau ini dicentang">
+        <input type="checkbox" data-gambar class="align-middle"> tampilkan gambar
+    </label>
 </div>
+
+{{-- Saklar auto-approve: usulan berikutnya lewat jalur "setujui & baca" begitu masuk.
+     Form biasa (tombolnya mengirim kebalikan keadaan sekarang), bukan checkbox
+     auto-submit — ini setelan di server yang berlaku untuk semua orang, jadi
+     tekanannya harus disengaja. Cuma di tab usulan: di tab lain tidak ada artinya. --}}
+@if ($f === 'suggestions')
+    <form method="POST" action="{{ route('posts.auto-approve') }}"
+          class="mb-3 flex flex-wrap items-center gap-2 rounded border px-3 py-2 text-xs {{ $autoApprove ? 'border-emerald-300 bg-emerald-50' : 'border-stone-300 bg-stone-50' }}">
+        @csrf
+        <input type="hidden" name="on" value="{{ $autoApprove ? 0 : 1 }}">
+        <span><strong>Auto-approve {{ $autoApprove ? 'nyala' : 'mati' }}</strong> —
+            {{ $autoApprove
+                ? 'usulan baru langsung disetujui, akunnya ikut approved, dan gambarnya dibaca AI.'
+                : 'usulan baru menunggu tombol setujui di halaman ini.' }}
+            Gerbang vision dan syarat tanggal/harga tetap berlaku.</span>
+        <button class="ml-auto rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-100"
+                onclick="return {{ $autoApprove ? 'true' : "confirm('Nyalakan auto-approve? Usulan siapa pun langsung dibaca AI tanpa dilihat dulu.')" }}">
+            {{ $autoApprove ? 'Matikan' : 'Nyalakan' }}
+        </button>
+    </form>
+@endif
 
 {{-- Form bulk KOSONG dan di luar tabel: checkbox tiap baris menunjuk ke sini lewat
      `form="bulk"` (HTML5), jadi tidak ada <form> yang membungkus tabel dan
@@ -124,26 +153,24 @@
                     </td>
                     <td class="px-2 py-1.5">
                         @if ($post['images'])
-                            {{-- Slide pertama saja. Route `posts.raw` melayani jpg RAW apa
-                                 adanya (~500 KB per gambar, bukan thumbnail), jadi satu
-                                 halaman 60 baris yang memuat carousel 14 slide berarti
-                                 puluhan MB untuk petak 40x40. Sisanya di balik <details>:
-                                 `loading=lazy` di dalam elemen tertutup memang tidak
-                                 di-fetch sampai dibuka, jadi nol JS dan nol byte sampai
-                                 ada yang benar-benar mau melihatnya. --}}
-                            <div class="flex gap-1">
+                            {{-- Slide pertama saja; sisanya di balik <details> (gambar di
+                                 elemen tertutup tidak di-fetch sampai dibuka). `src`-nya
+                                 sengaja kosong — JS di bawah yang mengisinya dari
+                                 `data-src` kalau centang "tampilkan gambar" menyala.
+                                 `display:none` tidak cukup: browser tetap mengunduhnya. --}}
+                            <div data-thumb class="flex gap-1">
                                 <a href="{{ $post['images'][0] }}" target="_blank" rel="noopener">
-                                    <img src="{{ $post['images'][0] }}" alt="slide 0" loading="lazy"
+                                    <img data-src="{{ $post['images'][0] }}" alt="slide 0" loading="lazy"
                                          class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
                                 </a>
                             </div>
                             @if (count($post['images']) > 1)
-                                <details class="mt-1">
+                                <details data-thumb class="mt-1">
                                     <summary class="cursor-pointer text-stone-500">+{{ count($post['images']) - 1 }}</summary>
                                     <div class="mt-1 flex flex-wrap gap-1">
                                         @foreach (array_slice($post['images'], 1) as $i => $src)
                                             <a href="{{ $src }}" target="_blank" rel="noopener">
-                                                <img src="{{ $src }}" alt="slide {{ $i + 1 }}" loading="lazy"
+                                                <img data-src="{{ $src }}" alt="slide {{ $i + 1 }}" loading="lazy"
                                                      class="h-10 w-10 rounded border border-stone-100 bg-stone-50 object-cover">
                                             </a>
                                         @endforeach
@@ -244,8 +271,51 @@
     </div>
 @endif
 
+{{-- Gambar mati = benar-benar tidak diunduh, bukan cuma disembunyikan: `img`
+     ber-`loading="lazy"` di dalam elemen `display:none` tidak pernah di-fetch
+     browser. Jadi saklarnya cukup satu kelas di <body>, tanpa data-src dan tanpa
+     mengubah markupnya. Nilainya di localStorage — preferensi, bukan filter. --}}
+<style>body.tanpa-gambar [data-thumb] { display: none }</style>
+<script>
+    (() => {
+        const kotak = document.querySelector('[data-gambar]')
+        const pasang = (on) => document.body.classList.toggle('tanpa-gambar', !on)
+
+        kotak.checked = localStorage.getItem('posts-gambar') === '1'
+        pasang(kotak.checked)
+
+        kotak.addEventListener('change', () => {
+            localStorage.setItem('posts-gambar', kotak.checked ? '1' : '0')
+            pasang(kotak.checked)
+        })
+    })()
+</script>
+
 {{-- Centang -> bar aksi, dan select status -> PATCH tanpa reload. Dua partial
      yang sama dipakai /accounts dan `/`. --}}
 @include('partials.bulk-select', ['satuan' => 'post', 'catatan' => ''])
 @include('partials.status-patch')
+
+{{-- Centang gambar. IIFE + pilihannya di localStorage: halaman ini sudah punya dua
+     <script> lain (bulk-select, status-patch), jadi nama di scope global bisa kembar. --}}
+<script>
+(() => {
+    const kotak = document.querySelector('[data-gambar]');
+    if (! kotak) return;
+
+    const pasang = on => document.querySelectorAll('img[data-src]').forEach(img => {
+        // Kalau on: isi sekali (browser yang menunda fetch lewat loading=lazy).
+        // Kalau off: buang src — yang terlanjur diunduh tetap ada di cache HTTP.
+        if (on) { if (! img.getAttribute('src')) img.src = img.dataset.src; }
+        else img.removeAttribute('src');
+    });
+
+    kotak.checked = localStorage.getItem('posts.gambar') === '1';
+    pasang(kotak.checked);
+    kotak.addEventListener('change', () => {
+        localStorage.setItem('posts.gambar', kotak.checked ? '1' : '0');
+        pasang(kotak.checked);
+    });
+})();
+</script>
 @endsection

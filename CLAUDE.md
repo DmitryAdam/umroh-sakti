@@ -178,6 +178,16 @@ baris yang dikenainya (`[SOLD OUT]`, `[CORET]`), bukan dikumpulkan di akhir teks
 Semua baris habis = `departures` [], harga & tanggal null → ditolak `belumLengkap()`,
 postnya tidak dikecualikan.
 
+**`--only` masuk ke post yang sudah punya hasil, tapi tidak menulis ulang slidenya.**
+Dulu `--only` mengimplikasikan `--force`; bedanya baru kelihatan saat gagal.
+`ExtractPost` berbatas 570 detik, dan satu carousel belasan slide bisa menembusnya —
+dengan force, retry-nya mulai dari nol, menembus batas yang sama, dan begitu terus
+sampai `tries` habis (terukur di produksi: `--only=18337410223216038` timeout 570s).
+Sekarang slide yang sudah punya file dilewat, jadi retry melanjutkan sisanya.
+Vision tetap dibayar lagi (transkripnya tidak disimpan); yang diselamatkan bagian
+paling lama — satu panggilan penyusun per slide. Tombol "baca ulang" tetap menulis
+ulang semuanya karena `bacaUlang()` menghapus filenya dulu; dari CLI pakai `--force`.
+
 Konsekuensinya hasil ekstraksi lama tidak otomatis memanen jadwalnya: filenya sudah
 ada, jadi `extract` melewatinya. Perlu `--force`/`--only` (bayar model lagi) atau
 tombol baca ulang per kartu.
@@ -318,6 +328,15 @@ pages_read_engagement  business_management
 Kode error yang sudah dipetakan di `graphGet()`: `#10` scope kurang, `#110`
 username salah atau bukan akun Professional, `#190` token mati, `#4/17/32` rate
 limit tingkat app.
+
+**`Invalid user id` itu vonis atas slot app-nya, bukan atas username targetnya.**
+Node di path request itu `IG_USER_ID`; pesan ini artinya token di slot itu tidak
+bisa melihatnya (Page-nya tidak di-link ke app itu, atau urutan `IG_USER_ID` vs
+`IG_ACCESS_TOKEN` tidak sepadan). Karena slotnya dipilih `crc32(username)`,
+gejalanya menyesatkan: **sebagian akun gagal selamanya, sisanya jalan** — kelihatan
+seperti akun yang bermasalah, padahal konfigurasi. `cmdFetch()` karena itu ikut
+pindah app untuk pesan ini, sama seperti `#4` — kegagalannya bisa diselamatkan app
+lain, dan kalau semua slot menjawab sama barulah itu benar-benar akunnya.
 
 Batasan: akun target wajib Professional (personal tidak terbaca sama sekali),
 tidak ada akses Story, media ID tidak bisa di-GET terpisah, rate limit berbasis
@@ -732,11 +751,23 @@ privat yang sama dengan tombol per barisnya (`bacaUlang()`, `blokir()`) — tida
 kedua yang bisa menyimpang. Post yang rawnya sudah dibuang dilewat diam-diam saat
 `extract` dan dihitung di pesannya.
 
-**Kolom gambar cuma memuat slide pertama.** `posts.raw` melayani jpg RAW apa adanya
-(~500 KB), bukan thumbnail — 60 baris berisi carousel 14 slide berarti puluhan MB
-untuk petak 40×40 yang tidak ada yang melihatnya. Sisanya di balik `<details>`
-ber-`loading="lazy"`: gambar di dalam elemen tertutup tidak di-fetch sampai dibuka,
-jadi nol JS dan nol byte sampai ada yang benar-benar mau melihat.
+**Kolom gambar mati secara default, dan yang keluar thumbnail.** Dua lapis, karena
+satu tidak cukup: `posts.raw` sekarang men-thumbnail (lebar maks 480, q75) lalu
+men-cache-nya di `storage/app/thumbs/raw-{media}-{index}.jpg` — aturan yang sama
+dengan `FlyerThumbController`, prefiks `raw-` supaya tidak tabrakan dengan cache
+flyer yang media+index-nya bisa sama. Sebelumnya jpg RAW apa adanya (~500 KB), dan
+60 baris berisi carousel 14 slide berarti puluhan MB untuk petak 40×40.
+
+Lapis keduanya centang **tampilkan gambar** di baris tab: `<img>`-nya dirender
+tanpa `src` (cuma `data-src`), dan JS di `posts.blade.php` yang mengisinya kalau
+centangnya menyala. `display:none` **bukan** penggantinya — browser tetap mengunduh
+gambar yang disembunyikan CSS. Pilihannya di `localStorage`, bukan query string,
+aturan yang sama dengan kartu/daftar di `/`. Default mati: yang dibaca operator itu
+caption + alasan berdampingan.
+
+Slide pertama saja yang di kolom; sisanya di balik `<details>` ber-`loading="lazy"` —
+gambar di dalam elemen tertutup tidak di-fetch sampai dibuka, jadi nol byte walau
+centangnya menyala.
 
 **Post yang tidak terjangkau fetch dimasukkan tangan lewat `/suggestions`.**
 `business_discovery` mengembalikan media urut **timestamp turun**, bukan urutan grid
@@ -774,6 +805,17 @@ Approval-nya satu tombol di `/posts` tab **usulan** (dan `/accounts` untuk akunn
 Untuk admin itu satu klik tambahan, dan itu harga yang murah untuk satu perilaku.
 Yang mau akun langsung jalan pakai textarea di `/accounts` — endpoint lain, memang
 punya admin.
+
+**Auto-approve itu saklar, bukan jalur kedua.** Tombol di tab usulan
+(`POST /posts/auto-approve`, admin saja) menyalakan "usulan baru langsung dibaca AI";
+`store()` yang nyala tetap menulis raw + `_suggested_by` seperti biasa lalu memanggil
+`bacaUlang()` — method yang sama dengan tombol **setujui & baca**. Jadi tidak ada
+cabang yang bisa diam-diam berperilaku beda dari tombolnya, dan gerbang vision +
+`belumLengkap()` tetap berlaku: yang dilewati cuma approval manusia.
+
+Nilainya di tabel `cache` (driver `database`), bukan tabel sendiri — satu boolean, dan
+`config` tidak bisa diubah dari UI. Konsekuensinya `cache:clear` mematikannya, dan itu
+default yang aman. Kalau kelak ada setelan kedua, baru bikin tabel `settings`.
 
 **Hapus ≠ blokir, dan tab usulan cuma punya yang pertama.** `DELETE /posts/{media}`
 (`destroy()`, grup `auth`) + `action=delete` di `POST /posts/bulk` membuang raw +

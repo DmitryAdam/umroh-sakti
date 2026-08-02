@@ -448,7 +448,15 @@ function graphGet(string $url): array
             110 => 'Username tidak ditemukan, atau akun target bukan Professional (Business/Creator).',
             190 => 'Token invalid/kedaluwarsa. Ambil token baru lalu jalankan: php probe.php auth <token>',
             4, 17, 32 => 'Kena rate limit tingkat app. Semua request numpuk di satu token — kasih jeda.',
-            default => null,
+            // Node di path-nya yang ditolak, bukan username targetnya: token slot ini
+            // tidak bisa melihat IG_USER_ID yang dipasangkan dengannya. Slot dipilih
+            // dari crc32(username), jadi gejalanya "sebagian akun gagal, sebagian
+            // jalan" — bukan konfigurasi yang mati total.
+            default => str_contains($msg, 'Invalid user id')
+                ? 'IG_USER_ID tidak cocok dengan token di slot ini. Cek urutan IG_ACCESS_TOKEN vs '
+                    ."IG_USER_ID, atau link Page-nya ke app itu lalu:\n"
+                    .'       php probe.php auth <short_token> --app=<slot>'
+                : null,
         };
         throw new RuntimeException("Graph API HTTP $code: $msg".($hint ? "\n       -> $hint" : ''));
     }
@@ -650,10 +658,18 @@ function cmdFetch(array $argv): void
             }
             // Limitnya per app, bukan per akun: pindah app, ulangi halaman yang sama.
             // Kalau semua app habis, galatnya dilempar — FetchAccount yang menunggu.
-            if ($sisa > 0 && str_contains($e->getMessage(), 'rate limit')) {
+            //
+            // `Invalid user id` ikut memicu pindah dengan alasan yang sama bentuknya:
+            // itu vonis atas pasangan (IG_USER_ID, token) di slot ini, bukan atas
+            // username targetnya. Slotnya dipilih crc32(username), jadi satu slot
+            // yang salah pasang bikin sebagian akun gagal selamanya sementara
+            // sisanya jalan — dan itu gagal yang bisa diselamatkan app lain.
+            $pindah = str_contains($e->getMessage(), 'rate limit')
+                || str_contains($e->getMessage(), 'Invalid user id');
+            if ($sisa > 0 && $pindah) {
                 $c = ($c + 1) % count($creds);
                 $sisa--;
-                out('  kena rate limit, pindah ke app '.($c + 1).'/'.count($creds));
+                out('  '.strtok($e->getMessage(), "\n").' — pindah ke app '.($c + 1).'/'.count($creds));
 
                 continue;
             }
@@ -1147,7 +1163,6 @@ function cmdExtract(array $argv): void
     $force = in_array('--force', $argv, true);
     // --only=<media_id>: ekstrak ulang satu post saja, buat ngetes perubahan prompt.
     $only = optval($argv, 'only');
-    $force = $force || $only !== null;
     // --no-gate: gerbang vision dilewati. Buat tombol "baca ulang AI" di halaman post —
     // operator sudah melihat flyernya sendiri dan menilai vonis vision salah.
     $noGate = in_array('--no-gate', $argv, true);
@@ -1181,7 +1196,16 @@ function cmdExtract(array $argv): void
         }
         // Satu post bisa menghasilkan beberapa file (carousel dipecah per gambar),
         // jadi "sudah pernah diekstrak" dicek dengan pola, bukan satu nama file.
-        if (! $force && glob(EXT_DIR.'/'.$post['id'].'{.json,-*.json}', GLOB_BRACE)) {
+        //
+        // `--only` melewati saringan ini tapi TIDAK memaksa slide-nya ditulis ulang
+        // (dulu `--only` mengimplikasikan `--force`). Bedanya kelihatan justru saat
+        // gagal: ExtractPost punya batas 570 detik, dan satu carousel 12 slide bisa
+        // menembusnya — slide yang kadung ditulis membuat retry-nya mulai lagi dari
+        // nol, menembus batas yang sama, dan begitu terus sampai `tries` habis.
+        // Sekarang retry-nya melanjutkan sisanya. Jalur "baca ulang" tetap menulis
+        // ulang semuanya karena `bacaUlang()` menghapus file lamanya lebih dulu;
+        // dari CLI, pakai `--force` kalau memang mau membayar model lagi.
+        if (! $force && $only === null && glob(EXT_DIR.'/'.$post['id'].'{.json,-*.json}', GLOB_BRACE)) {
             continue;
         }
         if (isset($excluded[(string) $post['id']])) {
@@ -1303,6 +1327,16 @@ function cmdExtract(array $argv): void
         foreach ($offers as $offer) {
             $file = slideFile($sent, $offer['n']);
             $label = count($offers) > 1 ? "{$post['id']}-{$offer['n']}" : $post['id'];
+
+            // Slide yang sudah punya hasil dilewat: itu yang bikin job yang kena
+            // timeout bisa dilanjutkan, bukan diulang dari nol. Vision-nya tetap
+            // dibayar lagi (transkripnya tidak disimpan), tapi bagian yang paling
+            // lama — satu panggilan penyusun per slide — tidak.
+            if (! $force && is_file(EXT_DIR."/$label.json")) {
+                out("  $label dilewat: sudah ada hasilnya");
+
+                continue;
+            }
 
             out(sprintf(
                 '  POST %s model=%s slide %s (%d char) -> JSON',

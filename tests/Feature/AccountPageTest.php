@@ -336,7 +336,8 @@ class AccountPageTest extends TestCase
             'caption' => 'Flyer kesehatan jamaah', 'permalink' => 'https://instagram.com/p/x',
             'timestamp' => '2026-07-18T02:18:27+0000',
         ]));
-        file_put_contents("$dir/0.jpg", 'jpg');
+        // Jpeg beneran, bukan string 'jpg': posts.raw men-thumbnail lalu men-cache-nya.
+        imagejpeg(imagecreatetruecolor(600, 600), "$dir/0.jpg");
         // Post yang rawnya sudah dihapus tetap harus muncul dari excluded_posts.
         DB::table('excluded_posts')->insert([
             ['media_id' => '111', 'source_account' => 'isinya', 'reason' => 'bukan_paket'],

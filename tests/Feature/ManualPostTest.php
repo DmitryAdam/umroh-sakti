@@ -104,6 +104,41 @@ class ManualPostTest extends TestCase
         Queue::assertNotPushed(ExtractPost::class);
     }
 
+    /**
+     * Auto-approve nyala: kiriman siapa pun lewat jalur "setujui & baca" begitu masuk
+     * — `_suggested_by` dibuang, akunnya naik `approved`, ExtractPost dilempar.
+     * Saklarnya di tabel `cache`, jadi worker & CLI ikut membacanya.
+     */
+    public function test_auto_approve_langsung_mengantrikan_kiriman(): void
+    {
+        $this->post(route('posts.auto-approve'), ['on' => 1])->assertRedirect();
+
+        $admin = auth()->user();
+        $this->actingAsPengusul();
+        $this->kirim()->assertRedirect(route('suggestions'));
+
+        $post = json_decode((string) file_get_contents(
+            storage_path('raw/'.self::AKUN.'/'.self::MEDIA.'/post.json')), true);
+        $this->assertArrayNotHasKey('_suggested_by', $post);
+        // Jejak pengirim tetap: approval bukan penghapus asal-usul.
+        $this->assertSame('pengusul@umroh.test', $post['_created_by']);
+        $this->assertSame('approved', SourceAccount::where('username', self::AKUN)->value('status'));
+        Queue::assertPushed(ExtractPost::class);
+
+        // Dimatikan lagi = perilaku lamanya balik, tanpa restart apa pun.
+        $this->actingAs($admin);
+        $this->post(route('posts.auto-approve'), ['on' => 0])->assertRedirect();
+        $this->get(route('posts', ['filter' => 'suggestions']))->assertOk()->assertSee('Auto-approve mati');
+    }
+
+    /** Saklarnya milik admin: peran `user` tidak boleh menyetujui kirimannya sendiri. */
+    public function test_pengusul_tidak_bisa_menyalakan_auto_approve(): void
+    {
+        $this->actingAsPengusul();
+
+        $this->post(route('posts.auto-approve'), ['on' => 1])->assertForbidden();
+    }
+
     /** Daftar "kiriman saya" memakai `_created_by`, jadi kirimannya sendiri kelihatan. */
     public function test_kiriman_sendiri_tampil_di_daftar(): void
     {
