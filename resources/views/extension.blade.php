@@ -82,11 +82,12 @@
         <h3 class="mt-5 text-sm font-medium">Sekaligus satu halaman profil</h3>
 
         <p class="mt-2 text-sm leading-6 text-muted-foreground">
-            Buka halaman profil travelnya (bukan satu postingan), klik ikonnya, lalu isi berapa
-            postingan teratas yang mau dikirim. Extension-nya membuka postingannya satu per satu di
-            tab itu &mdash; jangan dipakai selama putarannya jalan. Popupnya boleh ditutup;
-            putarannya tetap jalan dan kemajuannya kelihatan lagi kalau ikonnya diklik.
-            Sembilan postingan makan beberapa menit.
+            Buka halaman profil travelnya atau hasil pencarian tagar (bukan satu postingan), klik
+            ikonnya, lalu isi berapa postingan teratas yang mau dikirim. Tidak perlu discroll dulu
+            &mdash; extension-nya scroll sendiri dari paling atas sampai jumlahnya terkumpul, baru
+            membuka postingannya satu per satu di tab itu. Jangan pakai tab itu selama putarannya
+            jalan. Popupnya boleh ditutup; kemajuannya kelihatan di ikon extension-nya, dan tombol
+            berhenti ada kalau ikonnya diklik. Sembilan postingan makan beberapa menit.
         </p>
     </x-ui.card>
 

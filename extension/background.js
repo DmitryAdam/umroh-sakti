@@ -69,15 +69,6 @@ chrome.runtime.onMessage.addListener((msg, sender, balas) => {
     return true
   }
 
-  if (msg.grid) {
-    chrome.scripting
-      .executeScript({ target: { tabId: msg.grid }, func: kumpulLink })
-      .then(([{ result }]) => balas(result))
-      .catch(() => balas([]))
-
-    return true
-  }
-
   if (msg.statusGrid) {
     balas(antre)
 
@@ -97,7 +88,7 @@ chrome.runtime.onMessage.addListener((msg, sender, balas) => {
   if (msg.mulaiGrid) {
     if (antre?.jalan) return balas(antre)
 
-    jalanGrid(msg.mulaiGrid.tabId, msg.mulaiGrid.links)
+    jalanGrid(msg.mulaiGrid.tabId, msg.mulaiGrid.max)
     balas(antre)
 
     return
@@ -176,20 +167,30 @@ async function kirim(data) {
 // href tiap tile.
 let antre = null
 
-async function jalanGrid(tabId, links) {
+async function jalanGrid(tabId, max) {
   const asal = (await chrome.tabs.get(tabId).catch(() => ({}))).url
-  antre = { total: links.length, ke: 0, ok: 0, lewat: 0, gagal: [], jalan: true }
+  antre = { total: max, ke: 0, ok: 0, lewat: 0, gagal: [], jalan: true, kumpul: true }
+  lapor()
 
   // Dicek sekali di depan, bukan per post: syarat yang sama untuk seluruh putaran,
   // dan kalau tidak, sembilan post dibuka satu-satu cuma untuk gagal dengan sebab
   // yang identik — belasan page load IG terbuang untuk galat yang sudah pasti.
   if (!await chrome.permissions.contains({ origins: [`${await portal()}/*`] })) {
     antre.jalan = false
+    antre.kumpul = false
     antre.gagal.push('Alamat portal belum diatur. Buka pengaturan extension, isi alamatnya, lalu izinkan.')
     lapor()
 
     return
   }
+
+  const [{ result: links }] = await chrome.scripting.executeScript({
+    target: { tabId }, func: kumpulLink, args: [max],
+  })
+
+  antre.kumpul = false
+  antre.total = links.length
+  lapor()
 
   for (const url of links) {
     if (antre.batal) break
@@ -239,11 +240,15 @@ const kode = (url) => url.match(/\/(?:p|reel|tv)\/([\w-]+)/)?.[1] || url
 // postnya (selalu pendek); kalimat penuhnya di tooltip.
 const lapor = () => {
   const sisa = antre.total - antre.ke
-  const kepala = antre.jalan
-    ? `Post ${antre.ke}/${antre.total}…`
-    : (antre.batal ? `Dihentikan di post ${antre.ke}/${antre.total}.` : `Selesai, ${antre.total} post.`)
+  const kepala = antre.kumpul
+    ? `Scroll & kumpulkan tautan (target ${antre.total})…`
+    : antre.jalan
+      ? `Post ${antre.ke}/${antre.total}…`
+      : (antre.batal ? `Dihentikan di post ${antre.ke}/${antre.total}.` : `Selesai, ${antre.total} post.`)
 
-  chrome.action.setBadgeText({ text: antre.jalan ? String(sisa + 1) : (antre.gagal.length ? '!' : '✓') })
+  chrome.action.setBadgeText({
+    text: antre.kumpul ? '…' : antre.jalan ? String(sisa + 1) : (antre.gagal.length ? '!' : '✓'),
+  })
   chrome.action.setBadgeBackgroundColor({ color: antre.jalan ? '#2563eb' : (antre.gagal.length ? '#dc2626' : '#16a34a') })
   chrome.action.setTitle({
     title: `${kepala} ${antre.ok} terkirim, ${antre.lewat} dilewat, ${antre.gagal.length} gagal.`,
@@ -271,15 +276,47 @@ function tungguMuat(tabId) {
   })
 }
 
-// Jalan di halaman grid profil. Cuma `/p/` — reel dan tv itu video, dan satu
-// halaman IG yang dimuat percuma jauh lebih mahal daripada satu href yang dibuang.
-function kumpulLink() {
-  return [...new Set(
-    [...document.querySelectorAll('a[href*="/p/"]')]
-      .map((a) => a.getAttribute('href'))
-      .filter((h) => /^\/(?:[\w.]+\/)?p\/[\w-]+/.test(h || ''))
-      .map((h) => new URL(h, location.origin).href)
-  )]
+// Jalan di halaman grid/hasil pencarian. Cuma `/p/` — reel dan tv itu video, dan
+// satu halaman IG yang dimuat percuma jauh lebih mahal daripada satu href yang
+// dibuang.
+//
+// Discroll sendiri, dan mulainya dari PALING ATAS. Dua alasan yang sebenarnya satu:
+// IG melepas tile yang keluar layar dari DOM (windowing), jadi (a) tile di bawah
+// belum ada sampai discroll ke sana, dan (b) sesudah operator scroll jauh, yang
+// terbaca `querySelectorAll` cuma tile di sekitar viewport — putarannya mulai dari
+// post paling bawah, bukan yang teratas. Kumpulnya sambil jalan ke dalam Set, jadi
+// urutannya urutan pertama-kali-terlihat = urutan grid.
+async function kumpulLink(target) {
+  const tunggu = (ms) => new Promise((r) => setTimeout(r, ms))
+  const urls = new Set()
+
+  const ambil = () => {
+    for (const a of document.querySelectorAll('a[href*="/p/"]')) {
+      const h = a.getAttribute('href')
+      if (/^\/(?:[\w.]+\/)?p\/[\w-]+/.test(h || '')) urls.add(new URL(h, location.origin).href)
+    }
+  }
+
+  scrollTo(0, 0)
+  await tunggu(800)
+  ambil()
+
+  // Berhenti kalau targetnya cukup ATAU gridnya tidak tumbuh lagi beberapa kali
+  // berturut-turut — bukan sekali: IG sering butuh satu-dua putaran untuk memuat
+  // batch berikutnya, dan berhenti di kosong pertama memotong daftarnya kepagian.
+  // Batas putarannya jaring untuk feed yang tak berujung.
+  let mandek = 0
+  for (let i = 0; urls.size < target && mandek < 5 && i < 200; i++) {
+    const sebelum = urls.size
+
+    scrollBy(0, innerHeight * 0.9)
+    await tunggu(900)
+    ambil()
+
+    mandek = urls.size === sebelum ? mandek + 1 : 0
+  }
+
+  return [...urls].slice(0, target)
 }
 
 // Jalan di dalam halaman Instagram.

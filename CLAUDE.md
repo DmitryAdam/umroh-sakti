@@ -1145,6 +1145,20 @@ dibuang); sesudah itu tiap post dibuka satu per satu lewat `chrome.tabs.update` 
 lewat `panen()` + `kirim()` yang **sama persis** dengan tombol satuan. Tidak ada
 jalur kirim kedua.
 
+**Gridnya discroll sendiri, dan selalu dari paling atas.** IG melepas tile yang
+keluar layar dari DOM (windowing), dan itu dua masalah sekaligus: tile di bawah
+belum ada sampai discroll ke sana, **dan** sesudah operator scroll jauh yang terbaca
+`querySelectorAll` cuma tile di sekitar viewport — putarannya mulai dari post paling
+bawah, bukan yang teratas (terukur: 48 post ter-scroll, yang kepanen justru ekornya).
+`kumpulLink(target)` karena itu `scrollTo(0, 0)` dulu lalu memanen sambil turun ke
+dalam `Set`, jadi urutannya urutan pertama-kali-terlihat = urutan grid. Berhenti
+kalau target tercapai, grid tidak tumbuh **5 putaran** berturut-turut (bukan sekali —
+IG sering perlu satu-dua putaran untuk batch berikutnya), atau 200 putaran.
+
+Konsekuensinya target ditentukan **sebelum** tautannya ada, jadi popup tidak lagi
+menampilkan "N post di halaman ini" dan tombol stop disembunyikan selama fase kumpul:
+pengumpulannya satu `executeScript` di halaman IG yang tidak membaca `antre`.
+
 Dibuka lewat navigasi URL, bukan klik thumbnail: dialog overlay bergantung pada
 markup grid yang class-nya diacak, sementara permalinknya sudah ada di `href` tiap
 tile. Loopnya di service worker (`jalanGrid()`), bukan di popup — satu putaran 9

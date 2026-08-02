@@ -56,25 +56,16 @@ const kabar = (teks, kelas = '') => {
 // Mode grid. Yang dikirim dari sini permalinknya saja; caption, tanggal posting,
 // akun, dan slide carousel tetap dipanen background dari halaman postnya masing-
 // masing — grid cuma punya satu gambar per post dan tidak punya tanggal.
-async function grid(tabId) {
-  const links = await chrome.runtime.sendMessage({ grid: tabId })
-
-  if (!links?.length) {
-    return kabar('Tidak ada post di halaman ini. Buka grid profil travelnya, atau buka satu postnya.', 'gagal')
-  }
-
-  $('[name=max]').max = links.length
-  $('[name=max]').value = Math.min(9, links.length)
+function grid(tabId) {
   $('#grid').hidden = false
-  kabar(`${links.length} post di halaman ini. Yang teratas dibuka satu per satu — popup boleh ditutup, putarannya jalan terus.`)
+  kabar('Halaman grid. Extension scroll sendiri dari paling atas sampai jumlahnya '
+    + 'terkumpul, lalu membuka postnya satu per satu — popup boleh ditutup.')
 
   $('#grid').addEventListener('submit', (e) => {
     e.preventDefault()
     e.target.hidden = true
     kabar('Mulai…')
-    chrome.runtime.sendMessage({
-      mulaiGrid: { tabId, links: links.slice(0, +$('[name=max]').value) },
-    })
+    chrome.runtime.sendMessage({ mulaiGrid: { tabId, max: +$('[name=max]').value } })
   })
 }
 
@@ -86,6 +77,17 @@ $('#stop').addEventListener('click', (e) => {
 
 function render(a) {
   if (!a) return
+
+  if (a.kumpul) {
+    // Stop disembunyikan di fase ini: pengumpulannya satu executeScript yang jalan
+    // di halaman IG dan tidak membaca `antre`, jadi tombolnya tidak akan mengerjakan
+    // apa-apa sampai fase berikutnya. Fasenya sendiri berbatas (target tercapai,
+    // grid tidak tumbuh lagi, atau 200 putaran scroll).
+    kabar(`Scroll halaman & kumpulkan tautan, target ${a.total} post…`)
+    $('#stop').hidden = true
+
+    return
+  }
 
   const kepala = a.jalan
     ? `Post ${a.ke}/${a.total}…`
