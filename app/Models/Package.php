@@ -111,12 +111,93 @@ class Package extends Model
      */
     public static function dedupKey(
         ?string $departureDate, ?string $hotelMakkah,
-        ?string $hotelMadinah, ?string $airline,
+        ?string $hotelMadinah, ?string $airline, mixed $durationDays = null,
     ): string {
         return implode('|', [
             self::tanggal($departureDate) ?? '-',
+            $durationDays ? (string) (int) $durationDays : '-',
             ...array_map(self::fold(...), [$hotelMakkah, $hotelMadinah, $airline]),
         ]);
+    }
+
+    /**
+     * Baris lama yang paketnya sama. Bukan perbandingan string: field yang KOSONG
+     * di salah satu sisi dianggap cocok, karena satu ekstraksi yang gagal membaca
+     * maskapai jangan melahirkan baris kedua untuk paket yang sama — #1069
+     * ("Mohageereen/ODST", maskapai null) dan #1473 (hotel yang sama persis,
+     * "Saudi Airlines") lahir dua baris cuma karena itu.
+     *
+     * Yang boleh kosong cuma durasi + maskapai. Dua hotelnya wajib terisi DAN sama:
+     * mencocokkan lewat maskapai saja menyatukan paket yang cuma kebetulan sehari
+     * dan semaskapai (terukur: "Sofwa Tower 3" 48,8 jt bertemu paket 29,9 jt tanpa
+     * hotel). Tanggal wajib terisi — kalau tidak, semua baris tanpa tanggal menyatu.
+     */
+    public static function sepadan(string $a, string $b): bool
+    {
+        $x = explode('|', $a);
+        $y = explode('|', $b);
+
+        // tanggal + dua hotel wajib terisi dan sama persis
+        foreach ([0, 2, 3] as $i) {
+            if (($x[$i] ?? '-') === '-' || ($x[$i] ?? '-') !== ($y[$i] ?? '-')) {
+                return false;
+            }
+        }
+
+        // durasi + maskapai: kosong di salah satu sisi dianggap cocok
+        foreach ([1, 4] as $i) {
+            $p = $x[$i] ?? '-';
+            $q = $y[$i] ?? '-';
+
+            if ($p !== '-' && $q !== '-' && $p !== $q) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Baris pertama yang `sepadan()` dengan kunci ini. Kandidatnya disempitkan ke tanggalnya. */
+    public static function kembar(string $key, ?int $kecuali = null): ?self
+    {
+        $tanggal = explode('|', $key)[0] ?? '-';
+
+        if ($tanggal === '-') {
+            return null;
+        }
+
+        return self::where('dedup_key', 'like', $tanggal.'|%')
+            ->when($kecuali, fn ($q) => $q->whereKeyNot($kecuali))
+            ->get()
+            ->first(fn (self $p) => self::sepadan($key, (string) $p->dedup_key));
+    }
+
+    /**
+     * Akun lain yang memposting paket yang sama. Idempoten per media_id supaya
+     * import berulang atas backlog yang sama tidak menggandakan barisnya.
+     */
+    public function addRepost(?string $mediaId, ?string $account, ?string $permalink = null, ?string $postedAt = null): void
+    {
+        if (! $mediaId || $mediaId === $this->media_id) {
+            return;
+        }
+
+        $reposts = $this->reposts ?? [];
+
+        foreach ($reposts as $repost) {
+            if (($repost['media_id'] ?? null) === $mediaId) {
+                return;
+            }
+        }
+
+        $reposts[] = [
+            'media_id' => $mediaId,
+            'account' => $account ?: 'unknown',
+            'permalink' => $permalink,
+            'posted_at' => $postedAt,
+        ];
+
+        $this->update(['reposts' => $reposts]);
     }
 
     /**
@@ -129,17 +210,33 @@ class Package extends Model
      * dan -ah di akhir semuanya varian ejaan). Token sisanya diurut supaya "A, B"
      * sama dengan "B / A".
      *
+     * Ikut dibuang: isi kurung dan kata yang bukan nama — "setaraf" (1.574
+     * kemunculan, artinya "atau yang selevel"), bintang, dan angka jarak.
+     * "Snood Ajyad" vs "Snood Ajyad / Setaraf" vs "Snood Ajyad (±500 meter ke
+     * Masjidil Haram)" itu hotel yang sama ditulis tiga cara; tanpa ini
+     * ketiganya jadi tiga baris paket.
+     *
+     * Untuk maskapai, `air`/`airline(s)`/`airways` juga dibuang: "Scoot" vs
+     * "Scoot Airlines" dan "Saudia" vs "Saudia Airlines" sama-sama satu maskapai.
+     *
      * ponytail: mengurutkan token berarti dua hotel yang katanya sama tapi
      * urutannya beda ikut menyatu. Belum pernah kejadian di data; kalau nanti
      * kejadian, hilangkan sort()-nya dan bandingkan sebagai himpunan bersorot.
      */
+    private const FOLD_NOISE = ['al', 'setaraf', 'setara', 'sekelas', 'atau',
+        'hotel', 'bintang', 'air', 'airline', 'airlines', 'airways'];
+
     private static function fold(?string $value): string
     {
-        $tokens = preg_split('/[^a-z0-9]+/', mb_strtolower(trim((string) $value)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $bersih = preg_replace('/\([^)]*\)/', ' ', mb_strtolower(trim((string) $value)));
+        $tokens = preg_split('/[^a-z0-9]+/', (string) $bersih, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        // Saring kata sampah SEBELUM huruf h dibuang: "hotel" jadi "otel" dan tidak
+        // ketemu lagi di daftarnya.
         $tokens = array_filter(
-            array_map(fn ($t) => str_replace('h', '', $t), $tokens),
-            fn ($t) => $t !== '' && $t !== 'al',
+            $tokens,
+            fn ($t) => ! in_array($t, self::FOLD_NOISE, true) && ! preg_match('/^\d+m?$/', $t),
         );
+        $tokens = array_filter(array_map(fn ($t) => str_replace('h', '', $t), $tokens));
         sort($tokens);
 
         return implode('', $tokens) ?: '-';

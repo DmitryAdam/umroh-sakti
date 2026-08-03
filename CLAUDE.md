@@ -289,18 +289,48 @@ masih memegang kode lama kena aturan yang sama. Perlu, karena artefak 1970 perna
 masuk **setelah** `tanggal()` diperbaiki: workernya belum di-restart.
 
 **Deduplikasi per paket, bukan per akun.** Satu paket PPIU diposting ulang oleh
-puluhan agen. Dedup key: `(departure_date, hotel_makkah, hotel_madinah, airline)`
-— tanpa penanda travel, jadi dua travel dengan tanggal + hotel + maskapai identik
-akan menyatu; tambahkan penandanya begitu izin melekat ke `source_accounts`.
+puluhan agen. Dedup key: `(departure_date, duration_days, hotel_makkah,
+hotel_madinah, airline)` — tanpa penanda travel, jadi dua travel dengan tanggal +
+hotel + maskapai identik akan menyatu; tambahkan penandanya begitu izin melekat ke
+`source_accounts`.
 
-Tiga field terakhir dilewatkan `Package::fold()` dulu: tanda baca, spasi, kata
+**Kuncinya tidak dibandingkan sebagai string** (`Package::kembar()`): durasi dan
+maskapai yang **kosong di salah satu sisi dianggap cocok**. Satu ekstraksi yang
+gagal membaca maskapai jangan melahirkan baris kedua untuk paket yang sama — #1069
+("Mohageereen/ODST", maskapai null) dan #1473 (hotel + tanggal + harga sama persis,
+"Saudi Airlines") lahir dua baris cuma karena itu.
+
+Yang **tidak** boleh kosong: tanggal dan **dua-duanya** hotel. Mencocokkan lewat
+maskapai saja menyatukan paket yang cuma kebetulan sehari dan semaskapai — terukur
+"Sofwa Tower 3" 48,8 jt bertemu paket 29,9 jt yang hotelnya kosong. Durasi masuk
+kunci karena tanpa itu program 9 hari dan 12 hari dari hotel yang sama menyatu
+(2 pasang di data). Konsekuensinya baris tanpa hotel tidak pernah ikut dedup.
+
+Kelima field dilewatkan `Package::fold()` dulu: tanda baca, spasi, kata
 sandang "al", dan huruf **h** dibuang, lalu tokennya diurut. Transliterasi flyer
 tidak konsisten dan pemisah daftar juga tidak — akun yang sama pernah memposting
 paket yang sama dua kali sebagai "Qashr Al Anshar" + "Saudia, Garuda Indonesia"
 lalu "Qasr Al Anshar" + "Saudia / Garuda Indonesia", dan tanpa fold itu jadi dua
-baris (#76 dan #89). Konsekuensinya kunci dedup **berubah** kalau fold-nya diubah:
-hitung ulang `dedup_key` seluruh baris lama, kalau tidak baris baru tidak ketemu
-pasangannya dan dupe-nya lahir lagi.
+baris (#76 dan #89).
+
+**Isi kurung dan kata yang bukan nama ikut dibuang** (`FOLD_NOISE`): `setaraf`
+(1.574 kemunculan — artinya "atau yang selevel", bukan nama hotel), `setara`,
+`sekelas`, `atau`, `hotel`, `bintang`, angka telanjang (rating bintang) dan `350m`
+(jarak). Untuk maskapai: `air`/`airline(s)`/`airways`, jadi "Scoot" = "Scoot
+Airlines". "Snood Ajyad" vs "Snood Ajyad / Setaraf ★3" vs "Snood Ajyad (±500 meter
+ke Masjidil Haram)" itu satu hotel ditulis tiga cara; tanpa ini jadi tiga baris
+paket. Saringannya jalan **sebelum** huruf h dibuang — "hotel" jadi "otel" dan
+tidak ketemu lagi di daftarnya.
+
+Konsekuensinya kunci dedup **berubah** kalau fold-nya diubah: hitung ulang
+`dedup_key` seluruh baris lama, kalau tidak baris baru tidak ketemu pasangannya dan
+dupe-nya lahir lagi. Itu yang dikerjakan `php artisan packages:dedupe`
+(`--dry-run` untuk melihat dulu): hitung ulang seluruh kunci, lalu satukan baris
+yang kembar. Yang bertahan itu baris yang **kuncinya paling terisi** (seri → id
+terkecil), yang kalah dicatat di `reposts` baris pemenang lalu dihapus — bukan
+dibuang diam-diam. Filenya tidak disentuh kecuali flyer yang tidak dipakai baris
+lain: satu flyer jadwal bisa jadi beberapa baris lewat `offer_index`, dan file itu
+dipakai bersama.
 Post asal ekstraksi ada di kolom `media_id`/`source_account` paket
 (sekaligus penunjuk folder flyernya); akun yang memposting ulang masuk kolom
 JSON `reposts` — audit saja, idempoten per `media_id`.
@@ -568,6 +598,7 @@ php artisan serve                  # http://localhost:8000
 php artisan queue:work             # SEMUA antrian sekaligus, paralel (Ctrl+C berhenti)
 php artisan test                   # 131 test: import+dedup+ambang, filter publik, regulasi, halaman akun, post manual, login SSO, peran, penangguhan
 php artisan packages:import        # storage/extracted/*.json -> database
+php artisan packages:dedupe        # hitung ulang dedup_key + satukan yang kembar (--dry-run)
 php artisan migrate:fresh --seed
 php artisan view:clear && npm run build   # WAJIB: CSS-nya lewat Vite, bukan CDN lagi
 ```

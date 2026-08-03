@@ -95,6 +95,103 @@ class PackageImportTest extends TestCase
             'akun yang repost wajib tercatat, bukan dibuang');
     }
 
+    /**
+     * Maskapai yang tidak terbaca di salah satu ekstraksi bukan paket lain.
+     * #1069 (maskapai null) dan #1473 ("Saudi Airlines") punya tanggal, durasi,
+     * dan dua hotel yang sama persis — dua baris untuk satu paket.
+     */
+    public function test_maskapai_kosong_di_satu_sisi_tetap_paket_yang_sama(): void
+    {
+        $this->import(
+            $this->extraction(['_media_id' => 'm1', 'airline' => null]),
+            $this->extraction(['_media_id' => 'm2', '_source' => 'agen_b', 'airline' => 'Saudia Airlines']),
+        );
+
+        $this->assertSame(1, Package::count(), 'maskapai kosong bukan pembeda paket');
+    }
+
+    /** "Snood Ajyad", "Snood Ajyad / Setaraf", "Snood Ajyad (±500 m ke Haram)" = satu hotel. */
+    public function test_setaraf_dan_keterangan_dalam_kurung_bukan_nama_hotel(): void
+    {
+        $this->import(
+            $this->extraction(['_media_id' => 'm1',
+                'hotel_makkah' => ['raw_name' => 'Snood Ajyad'],
+                'hotel_madinah' => ['raw_name' => 'Durrat Al Eiman'],
+            ]),
+            $this->extraction(['_media_id' => 'm2', '_source' => 'agen_b',
+                'hotel_makkah' => ['raw_name' => 'Snood Ajyad / Setaraf ★3'],
+                'hotel_madinah' => ['raw_name' => 'Durrat Al Eiman (±150 meter ke Masjid Nabawi)'],
+            ]),
+        );
+
+        $this->assertSame(1, Package::count(), '"setaraf" dan isi kurung bukan bagian nama hotel');
+    }
+
+    /** Hotel + tanggal sama tapi durasi beda itu program lain, bukan repost. */
+    public function test_durasi_berbeda_tetap_paket_berbeda(): void
+    {
+        $this->import(
+            $this->extraction(['_media_id' => 'm1', 'duration_days' => 9]),
+            $this->extraction(['_media_id' => 'm2', 'duration_days' => 12]),
+        );
+
+        $this->assertSame(2, Package::count());
+    }
+
+    /** Hotel kosong bukan wildcard: tanpa itu satu baris tanpa hotel menelan paket sehari. */
+    public function test_hotel_kosong_tidak_digabung_dengan_paket_lain(): void
+    {
+        $this->import(
+            $this->extraction(['_media_id' => 'm1']),
+            $this->extraction(['_media_id' => 'm2', '_source' => 'agen_b',
+                'hotel_makkah' => null, 'hotel_madinah' => null,
+            ]),
+        );
+
+        $this->assertSame(2, Package::count());
+    }
+
+    /**
+     * Baris lama yang lahir sebelum aturan dedup-nya diperketat: kuncinya dihitung
+     * ulang lalu yang kalah jadi repost. Tanpa hitung-ulang, baris lama tidak
+     * pernah ketemu pasangannya.
+     */
+    public function test_perintah_dedupe_menyatukan_baris_lama(): void
+    {
+        $this->import($this->extraction(['_media_id' => 'm1', 'airline' => null]));
+
+        // Baris kedua ditulis langsung: import yang baru memang sudah menolaknya.
+        $lama = Package::sole()->replicate()->fill([
+            'media_id' => 'm2', 'source_account' => 'agen_b',
+            'airline' => 'Saudia Airlines', 'flyer_index' => null,
+            'dedup_key' => 'kunci-lama-yang-beda',
+        ]);
+        $lama->save();
+
+        $this->artisan('packages:dedupe')->assertSuccessful();
+
+        $this->assertSame(1, Package::count());
+        $this->assertSame('m2', Package::sole()->media_id,
+            'yang datanya lebih lengkap yang bertahan — maskapainya kebaca, bukan null');
+        $this->assertSame(['m1'], array_column(Package::sole()->reposts, 'media_id'),
+            'yang kalah dicatat sebagai repost, bukan dibuang diam-diam');
+    }
+
+    public function test_dedupe_dry_run_tidak_mengubah_apa_pun(): void
+    {
+        $this->import($this->extraction(['_media_id' => 'm1', 'airline' => null]));
+
+        $lama = Package::sole()->replicate()->fill([
+            'media_id' => 'm2', 'flyer_index' => null, 'dedup_key' => 'kunci-lama-yang-beda',
+        ]);
+        $lama->save();
+
+        $this->artisan('packages:dedupe', ['--dry-run' => true])->assertSuccessful();
+
+        $this->assertSame(2, Package::count());
+        $this->assertSame('kunci-lama-yang-beda', Package::find($lama->id)->dedup_key);
+    }
+
     public function test_tanggal_berbeda_tetap_paket_berbeda(): void
     {
         $this->import(

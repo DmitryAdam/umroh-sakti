@@ -444,13 +444,15 @@ class ImportExtractedPackages extends Command
             $d['hotel_makkah']['raw_name'] ?? null,
             $d['hotel_madinah']['raw_name'] ?? null,
             $d['airline'] ?? null,
+            $d['duration_days'] ?? null,
         );
 
-        $package = Package::where('dedup_key', $key)->first();
-
-        if ($package) {
+        if ($package = Package::kembar($key)) {
             // Repost dari akun agen lain: catat di kolom reposts, jangan bikin paket baru.
-            $this->addRepost($package, $d);
+            $package->addRepost(
+                $d['_media_id'], $d['_source'] ?? null,
+                $d['_permalink'] ?? null, $d['_posted_at'] ?? null,
+            );
             $merged++;
 
             return;
@@ -507,35 +509,6 @@ class ImportExtractedPackages extends Command
         $file = $d['_useful_images'][0] ?? null;
 
         return $file === null ? null : (int) pathinfo($file, PATHINFO_FILENAME);
-    }
-
-    /**
-     * Akun lain yang memposting paket yang sama. Idempoten per media_id supaya
-     * import berulang atas backlog yang sama tidak menggandakan barisnya.
-     */
-    private function addRepost(Package $package, array $d): void
-    {
-        $reposts = $package->reposts ?? [];
-
-        foreach ($reposts as $repost) {
-            if (($repost['media_id'] ?? null) === $d['_media_id']) {
-                return;
-            }
-        }
-
-        // Post asal ekstraksi sudah tercatat di kolom paket itu sendiri.
-        if ($package->media_id === $d['_media_id']) {
-            return;
-        }
-
-        $reposts[] = [
-            'media_id' => $d['_media_id'],
-            'account' => $d['_source'] ?? 'unknown',
-            'permalink' => $d['_permalink'] ?? null,
-            'posted_at' => $d['_posted_at'] ?? null,
-        ];
-
-        $package->update(['reposts' => $reposts]);
     }
 
     /**
