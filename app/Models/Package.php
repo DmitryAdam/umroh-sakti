@@ -25,15 +25,19 @@ class Package extends Model
         'perlengkapan', 'handling', 'city_tour', 'asuransi'];
 
     /**
-     * Status publikasi. Cuma `published` yang tampil ke pengunjung; `draft` dan
-     * `review` beda asalnya saja (ImportExtractedPackages: `_needs_review` →
-     * review), dua-duanya sama-sama belum publik.
+     * Dua status saja. Hasil scrap lahir `published` — pipeline-nya sudah
+     * menyaring berlapis (gerbang vision, isHaji, bukanUmroh, belumLengkap) dan
+     * yang lolos tapi salah dibuang belakangan lewat × / blokir, bukan ditahan
+     * di antrean yang tidak pernah habis dibaca. `review` cuma untuk kiriman
+     * tangan (`_manual`): itu satu-satunya sumber yang belum lewat penyaringan
+     * kita sendiri.
      *
-     * Tidak ada `rejected` walau migrasinya menyebutnya: paket yang ditolak
+     * Tidak ada `draft` lagi (dulu = hasil scrap yang `_needs_review`-nya false)
+     * dan tidak ada `rejected` walau migrasinya menyebutnya: paket yang ditolak
      * dihapus barisnya (tombol ×) sekalian mengecualikan postnya, jadi status
      * "ditolak" tidak pernah punya baris untuk ditempeli.
      */
-    public const STATUSES = ['draft', 'review', 'published'];
+    public const STATUSES = ['review', 'published'];
 
     /** Koreksi manusia atas hasil ekstraksi — bahan perbaikan prompt, bukan status publikasi. */
     public const REVIEW_VERDICTS = [
@@ -369,6 +373,6 @@ class Package extends Model
 
     public function scopeNeedsReview($q)
     {
-        return $q->whereIn('status', ['draft', 'review']);
+        return $q->where('status', 'review');
     }
 }

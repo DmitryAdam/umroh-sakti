@@ -205,7 +205,6 @@ class PipelineController extends Controller
             // Corong satuan PAKET.
             'hasil_ekstraksi' => count($hasil),
             'paket' => (int) $status->sum(),
-            'draft' => (int) ($status['draft'] ?? 0),
             'review' => (int) ($status['review'] ?? 0),
             'published' => (int) ($status['published'] ?? 0),
 

@@ -105,15 +105,19 @@ class PackageImportTest extends TestCase
         $this->assertSame(2, Package::count());
     }
 
-    public function test_paket_tidak_pernah_langsung_published(): void
+    /**
+     * Yang menahan status cuma `_manual` (kiriman tangan), bukan `_needs_review`:
+     * hasil scrap sudah lewat gerbang vision + saringan import, jadi langsung publik.
+     */
+    public function test_hanya_kiriman_tangan_yang_masuk_review(): void
     {
         $this->import(
-            $this->extraction(['_media_id' => 'm1', '_needs_review' => false]),
-            $this->extraction(['_media_id' => 'm2', '_needs_review' => true, 'departure_date' => '2026-11-01']),
+            $this->extraction(['_media_id' => 'm1', '_needs_review' => true]),
+            $this->extraction(['_media_id' => 'm2', '_manual' => true, 'departure_date' => '2026-11-01']),
         );
 
-        $this->assertSame(0, Package::where('status', 'published')->count());
-        $this->assertSame(1, Package::where('status', 'review')->count());
+        $this->assertSame('published', Package::where('media_id', 'm1')->value('status'));
+        $this->assertSame('review', Package::where('media_id', 'm2')->value('status'));
     }
 
     /** Hotel ikut di baris paket, apa adanya dari flyer. */

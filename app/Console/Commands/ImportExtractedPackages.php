@@ -12,8 +12,8 @@ use Illuminate\Support\Facades\File;
 /**
  * Memasukkan hasil `php probe.php extract` (storage/extracted/*.json) ke database.
  *
- * Tidak pernah mem-publish. Semua paket masuk draft/review — publikasi hanya
- * setelah dilihat manusia di halaman review.
+ * Hasil scrap langsung `published`; cuma kiriman tangan (`_manual`) yang mendarat
+ * sebagai `review`.
  */
 class ImportExtractedPackages extends Command
 {
@@ -475,8 +475,11 @@ class ImportExtractedPackages extends Command
             'airline' => $d['airline'] ?? null,
             'guide_name' => $d['guide_name'] ?? null,
             'extension' => $d['extension'] ?? 'none',
-            // Tidak pernah langsung published — selalu lewat review manusia.
-            'status' => ($d['_needs_review'] ?? true) ? 'review' : 'draft',
+            // Hasil scrap sudah lewat gerbang vision + isHaji + bukanUmroh +
+            // belumLengkap; yang lolos tapi salah dibuang lewat × / blokir.
+            // `_needs_review` tidak lagi menahan apa pun — angkanya tetap di
+            // raw_extraction sebagai bahan perbaikan prompt.
+            'status' => ($d['_manual'] ?? false) ? 'review' : 'published',
             'extracted_at' => now(),
             'confidence' => $d['confidence']['price'] ?? null,
             'raw_extraction' => $d,

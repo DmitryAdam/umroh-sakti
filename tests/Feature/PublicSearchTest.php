@@ -130,7 +130,7 @@ class PublicSearchTest extends TestCase
             ->assertJsonStructure([
                 'sekarang', 'akun', 'terfetch', 'antrian',
                 'post_diunduh', 'post_menunggu', 'post_dibaca', 'post_dikecualikan',
-                'paket', 'draft', 'review', 'published', 'jalan',
+                'paket', 'review', 'published', 'jalan',
             ]);
     }
 
@@ -200,7 +200,7 @@ class PublicSearchTest extends TestCase
 
         $this->package(['status' => 'review', 'media_id' => 'a']);
         $this->package(['status' => 'review', 'media_id' => 'b']);
-        $this->package(['status' => 'draft', 'media_id' => 'c']);
+        $this->package(['status' => 'review', 'media_id' => 'c']);
         $this->package(['status' => 'published', 'media_id' => 'd']);
 
         DB::table('excluded_posts')->insert([
@@ -213,8 +213,7 @@ class PublicSearchTest extends TestCase
             ->assertOk()
             ->assertJson([
                 'paket' => 4,
-                'review' => 2,
-                'draft' => 1,
+                'review' => 3,
                 'published' => 1,
                 'post_dikecualikan' => 3,
                 'alasan' => ['bukan_paket' => 2, 'sebelum_ambang' => 1],
@@ -395,7 +394,7 @@ class PublicSearchTest extends TestCase
         $this->package(['airline' => 'Saudia']);
         $this->package(['airline' => 'Saudia']);
         $this->package(['airline' => 'Oman Air']);
-        $this->package(['airline' => 'Qatar Airways', 'status' => 'draft']);   // belum published
+        $this->package(['airline' => 'Qatar Airways', 'status' => 'review']);   // belum published
 
         $this->get('/')->assertOk()
             ->assertSee('Saudia (2)')

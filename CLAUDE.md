@@ -90,8 +90,24 @@ salah baca hilang selamanya begitu prompt-nya membaik. Filenya dibiarkan di
 `storage/extracted`; import berikutnya mencobanya lagi, gratis. Konsekuensinya
 angka `hasil_ekstraksi` di corong memang boleh lebih besar dari `paket`.
 
-**Jangan auto-publish harga.** Harga dengan confidence < 0.8 atau field wajib
-kosong wajib masuk review queue. Tidak ada jalur yang melewati review manusia.
+**Dua status saja: `review` dan `published`** (`Package::STATUSES`). Hasil scrap
+lahir **langsung `published`**; `review` cuma untuk kiriman tangan. Penandanya
+`_manual` di `post.json`, dititipkan ke hasil ekstraksi oleh `writeExtraction()`
+karena import tidak membaca `post.json` lagi.
+
+Aturan lama "jangan auto-publish, confidence < 0.8 wajib masuk review queue"
+**dicabut 2026-08-03**, dan `draft` ikut dibuang. Antrean review yang menahan
+semua baris tidak pernah habis dibaca: terukur 373 `review` + 201 `draft`
+menumpuk sementara pipeline-nya sudah menyaring berlapis (pra-gerbang caption,
+gerbang vision, `isHaji()`, `bukanUmroh()`, `belumLengkap()`). Yang lolos tapi
+salah dibuang belakangan lewat tombol × atau blokir — itu lebih murah daripada
+menahan 600 baris benar demi beberapa yang salah. `_needs_review` masih ditulis
+per hasil ekstraksi, cuma tidak lagi menahan status: bahan perbaikan prompt, bukan
+gerbang.
+
+Yang **tidak** ikut dicabut: kiriman tangan (`/suggestions`, chrome extension)
+tetap mendarat `review`. Itu satu-satunya sumber yang belum lewat penyaringan
+kita sendiri.
 
 **Harga USD dikonversi ke IDR saat import, bukan saat ekstraksi.** Sebagian
 travel memasang "USD 3.300" di flyer. Ekstraksi menulisnya apa adanya
@@ -598,7 +614,7 @@ dan mematikan `position: sticky` headernya.
 
 **Teks yang dibaca pengusul ditulis untuk orang awam, bukan untuk yang paham
 pipeline-nya.** `/suggestions` sempat menerangkan `--limit`, kuota Graph, gerbang
-vision, dan status `draft`/`review` di caption tiap field — semuanya benar dan tidak
+vision, dan status `review` di caption tiap field — semuanya benar dan tidak
 satu pun menjawab "saya harus isi apa". Aturannya: satu kalimat per field, kata kerja
 yang bisa dikerjakan, istilah internal cuma boleh muncul kalau yang mengisi memang
 harus tahu (tanggal posting: perlu, karena itu jangkar tahun dan salah isi menggeser
@@ -710,7 +726,7 @@ halaman penuh.
 baca ulang (`POST /packages/{id}/extract`), segarkan (`POST /packages/{id}/fetch`),
 buang (`DELETE /packages/{id}`). Tooltipnya `title` bawaan browser.
 
-**Status publikasi diubah dari kartu**, select tiga pilihan di bar aksi yang sama
+**Status publikasi diubah dari kartu**, select dua pilihan di bar aksi yang sama
 (`PATCH /packages/{id}/status`, whitelist `Package::STATUSES`). Manajemen paketnya
 tidak punya halaman sendiri: `/` dalam pratinjau sudah daftar paket berfilter, jadi
 antrean review = `?status=review` (facet `status` sudah ada, lengkap dengan
@@ -718,10 +734,10 @@ jumlahnya). Simpannya lewat fetch tanpa reload — kalau halamannya dimuat ulang
 kartu yang baru dipublish langsung keluar dari filter yang sedang dipakai dan sisa
 kartunya bergeser di tengah kerja.
 
-Statusnya tiga: `draft` dan `review` sama-sama belum publik (bedanya cuma asal —
-`_needs_review` dari ekstraksi jadi `review`), `published` yang tampil ke
-pengunjung. `rejected` di komentar migrasi **tidak dipakai**: paket yang ditolak
-dihapus barisnya lewat ×, jadi tidak ada baris untuk ditempeli status itu.
+Statusnya dua: `review` (kiriman tangan, belum publik) dan `published` (sisanya).
+`draft` dibuang 2026-08-03 — lihat aturan status di atas. `rejected` di komentar
+migrasi juga **tidak dipakai**: paket yang ditolak dihapus barisnya lewat ×, jadi
+tidak ada baris untuk ditempeli status itu.
 
 Baca ulang wajib tiga langkah, bukan cuma dispatch `ExtractPost`: flyer
 dikembalikan ke `storage/raw` (`Package::restoreFlyer()`, kebalikan
@@ -835,7 +851,7 @@ non-numerik = kartunya tampil tanpa gambar.
 Yang ditulis cuma `storage/raw/{user}/{media}/` persis sebentuk `savePost()` di
 `probe.php`; sesudah itu **tidak ada jalur khusus**. Gerbang vision tetap menilai
 (kiriman manusia bukan vonis "ini paket"), `belumLengkap()` tetap berlaku, dan hasilnya
-tetap `draft`/`review` — tidak ada yang bisa langsung publish lewat sini.
+tetap `review` — tidak ada yang bisa langsung publish lewat sini.
 
 **Semua kiriman jadi usulan, termasuk kiriman admin.** Dulu admin punya jalur cepat di
 formulir yang sama: akun langsung `approved`, `ExtractPost` langsung dilempar, kiriman
@@ -946,7 +962,7 @@ Dua kotak yang paling sering ditanya sengaja dibuang bentuk lamanya:
 `hasil_ekstraksi` sekarang jadi baris di kartu **db** ("belum diimpor"), tempatnya
 memang di situ karena import yang menghabiskannya. Dan `jadi paket 734` + `published
 590` menghitung baris yang sama dua kali; sekarang satu kotak `590/734 paket tampil
-publik`, sisanya (`review`, `draft`) jadi subbarisnya.
+publik`, sisanya (`review`) jadi subbarisnya.
 
 Barnya juga bukan lagi "sisa antrian dari puncak sesi ini" — angka yang mulai lagi
 dari 0 tiap reload dan tidak berarti apa pun di halaman yang baru dibuka. Sekarang
@@ -1430,7 +1446,7 @@ sendiri dan tidak lewat Laravel), jadi `php artisan config:cache` aman.
 antrian), dan `log` (80 baris terakhir). Corongnya: `akun`/`terfetch`/`akun_gagal`
 → `post_diunduh` → `post_menunggu` (+`antri_ai`) → `post_dibaca`
 (+`hasil_ekstraksi`) → `post_dikecualikan` (+`alasan` per reason) → `paket`
-(+`draft`/`review`/`published`), plus `antri_ig|ai|db` dan `gagal`
+(+`review`/`published`), plus `antri_ig|ai|db` dan `gagal`
 (`failed_jobs`). Semuanya dihitung ulang dari raw/extracted/DB tiap polling —
 tidak ada tabel progres yang perlu dijaga sinkron.
 
@@ -1467,7 +1483,7 @@ php artisan queue:work          satu perintah, tiga antrian jalan paralel
    +-- db  ExtractPending  pindai raw -> antrikan ke ai
            ImportPackages  packages:import --prune -> DB + excluded_posts
                     |
-          / (review + pratinjau lokal)  ->  status=published  ->  / (publik)
+          / (publik) langsung; kiriman tangan mampir di ?status=review
 ```
 
 Pemicunya: tombol `scrap` di `/accounts` (atau `php artisan packages:crawl accounts.txt`)
@@ -1475,6 +1491,6 @@ yang cuma mengantrikan job. Tidak ada langkah manual di antara fetch, extract, d
 `ig` menyelesaikan satu akun, `db` langsung memindainya ke `ai`, dan `ai` tidak
 menunggu akun berikutnya.
 
-Paket masuk sebagai `review` atau `draft`, tidak pernah langsung `published`.
-Publish = pilih `published` di select status pada kartu (pratinjau `/`), setelah
-datanya dilihat.
+Hasil scrap masuk langsung `published`. Cuma kiriman tangan (`_manual`) yang
+mendarat `review` dan menunggu select status di kartu (pratinjau `/`). Yang salah
+dibuang lewat × atau blokir, bukan ditahan.

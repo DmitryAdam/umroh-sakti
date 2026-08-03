@@ -200,7 +200,7 @@ class ManualPostTest extends TestCase
         Package::create([
             'media_id' => self::MEDIA, 'source_account' => self::AKUN, 'flyer_index' => 0,
             'offer_index' => 0, 'departure_date' => '2026-09-01', 'price_quad' => 30_000_000,
-            'dedup_key' => 'uji-manual', 'status' => 'draft',
+            'dedup_key' => 'uji-manual', 'status' => 'review',
         ]);
         File::put(storage_path('extracted/'.self::MEDIA.'-0.json'), '{}');
 

@@ -1457,6 +1457,9 @@ function writeExtraction(string $target, array $data, array $post, string $flyer
     $data['_permalink'] = $post['permalink'] ?? null;
     $data['_source'] = $post['_source_account'];
     $data['_posted_at'] = $post['timestamp'] ?? null;
+    // Kiriman tangan mendarat sebagai `review`, hasil scrap langsung `published` —
+    // import butuh penandanya di sini karena post.json tidak dibacanya lagi.
+    $data['_manual'] = $post['_manual'] ?? false;
     // Transkrip ikut disimpan: kalau harga meleset, ketahuan salahnya di mata (vision)
     // atau di penyusun (teks), tanpa perlu panggil ulang.
     $data['_flyer_text'] = $flyerText ?: null;

@@ -263,7 +263,8 @@ class PostController extends Controller
      * Yang ditulis di sini cuma `storage/raw/{user}/{media}/` persis seperti
      * `savePost()` di probe.php — sesudah itu tidak ada jalur khusus: `ExtractPost`
      * membacanya seperti post hasil scrap, gerbang vision tetap menilai, dan paketnya
-     * tetap mendarat sebagai `draft`/`review`. Tidak ada yang bisa langsung publish
+     * tetap mendarat sebagai `review` — penanda `_manual` di post.json yang menahannya,
+     * sementara hasil scrap langsung `published`. Tidak ada yang bisa langsung publish
      * lewat sini.
      *
      * **Semua kiriman jadi usulan, termasuk kiriman admin.** Dulu admin punya jalur

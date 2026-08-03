@@ -21,7 +21,7 @@
 
     {{-- Post manual: jalan masuk untuk yang TIDAK bisa dijangkau fetch (pinned lama,
          di luar --limit, akun yang belum pernah di-scrap). Sesudah disetujui tidak ada
-         jalur khusus — gerbang vision tetap menilai, hasilnya tetap draft/review. --}}
+         jalur khusus — gerbang vision tetap menilai, hasilnya tetap `review`. --}}
     <x-ui.card class="p-4">
         <form method="POST" action="{{ route('posts.store') }}" enctype="multipart/form-data" class="grid gap-4">
             @csrf

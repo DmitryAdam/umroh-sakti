@@ -101,7 +101,7 @@ const TAHAP = (n) => [
         nilai: `${N(n.published)}/${N(n.paket)}`, satuan: 'paket tampil publik',
         persen: pct(n.published, n.paket),
         baris: [
-            `${N(n.review)} nunggu review · ${N(n.draft)} draft`,
+            `${N(n.review)} usulan nunggu review`,
             n.hasil_ekstraksi ? `${N(n.hasil_ekstraksi)} hasil ekstraksi belum diimpor` : null,
         ],
     },
